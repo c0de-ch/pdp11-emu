@@ -1,0 +1,217 @@
+From: pdp11-emu authors
+Subject: [PATCH 3/3] timer: idle rate before calibration, throttle changes at run time
+
+Two faults of the same calibration code: the idle rate taken from a clock
+that has not calibrated yet (the UNIX V5 clock stall), and run-time switches
+between SET THROTTLE 1M and SET NOTHROTTLE plus SET CPU IDLE (a front end's
+speed setting).
+
+1. The idle rate before the first calibration
+
+sim_idle() turns the instructions until the next event into a sleep of
+sim_interval / sim_idle_cyc_ms milliseconds.  Only sim_rtcn_calb() measures
+sim_idle_cyc_ms, from a calibration second with less than 1% idle; until
+then the first sim_idle() call derives it from the calibrated timer's tick
+size.  A guest that executes WAIT before its clock completed one calibration
+second (UNIX V5 sits at "login:" a few milliseconds after the kernel starts
+the KW11-L) freezes the device's initial tick size into it: 16667 cycles per
+60Hz tick (1 MIPS), so sim_idle_cyc_ms = 1000 on a host that executes 50-65
+million instructions per second, and a mostly idle guest never measures it.
+
+The self-regulating calibration then settles the tick at ~17000 "sleep"
+cycles.  In a busy burst (the V5 session's cc) ticks come ~60 times too fast,
+a calibration second ends within tens of milliseconds and multiplies the
+tick size by up to ~90 (36 observed: 27936 -> 1022068).  Back in WAIT every
+tick sleeps ~1 s, so the next calibration second spans 50-60 s and is
+discarded as a host suspension ("gap too big", > 30 s): the clock stays at
+one tick per second for as long as the guest idles (date advances a second
+per minute, tty delays and console polling take seconds per line).
+
+When sim_idle_cyc_ms is still unset, use the start-up precalibrated execution
+rate instead of the tick size (simulators without precalibration commands
+keep the old derivation).  The sub-millisecond waits before the first
+calibration then spin, as on systems that are busy for their first second,
+and that calibration measures sim_idle_cyc_ms.  Systems whose first
+calibration second is busy (UNIX V6 and V7, both 2.11BSDs, RSX-11M+, RSTS/E;
+RT-11 does not idle) never reach this code, nor do SET CPU IDLE=n (stability
+wait) and throttling (idling off).
+
+That calibration second has to measure the run alone.  BOOT, GO and RUN zero
+sim_gtime (), and their device resets set the clocks' calibration start to
+the time the simulator last stopped (at start-up: before the 100 ms
+precalibration), but sim_start_timer_services() moved it by the time stopped
+only when sim_gtime () was not 0.  The first calibration second after a boot
+therefore included the time at the prompt.  A guest that starts the KW11-L
+without resetting it while running (UNIX V5's kernel resets it; a bare-metal
+program does not) then idled at a rate measured that many times too low:
+5442 instead of about 110000 cycles/ms when started 0.3 s after start-up (a
+short burst then slowed its clock to 12 ticks/s for 5 s), and started a
+second after start-up it stalled at one tick per second as above.  The time
+stopped now always moves the calibration start.
+
+2. Throttle changes at run time
+
+SET NOTHROTTLE left sim_throt_state at THROTTLE.  A later SET THROTTLE then
+resumed the old wait in sim_throt_sched() and never reached the end of a
+measurement, where _sim_timer_adjust_cal() sets the clocks' tick size to the
+throttled rate.  The KW11-L kept the tick size calibrated while unthrottled
+(1.9 million instructions per 60Hz tick), now executed at 1 MIPS: it ticked
+every two seconds, and each calibration second took two minutes and was
+discarded as "gap too big", so the clock stalled for good.  Every new
+throttle setting (except the fixed N/M form) now starts in INIT and
+measures again, as at start-up.  sim_throt_sched() sets the start of that
+measurement: with the clock calibrated, INIT goes to TIME at once, and the
+old start (0 after a fast boot) averaged over the time at the prompt and
+printed a bogus "Host CPU could be too slow" warning.
+
+While throttled, a calibration second with 0% idle (idling is off) measured
+sim_idle_cyc_ms at the throttled rate, about 1000 cycles/ms, because the
+throttle's sleeps are part of its wall time.  After SET NOTHROTTLE an idle
+guest has no further busy second to correct it: the V5 state above, and a
+short burst multiplied the tick size and stalled the clock.  sim_rtcn_calb()
+no longer measures it in a second in which the throttle slept.
+
+_sim_timer_adjust_cal() forces a calibration on the next tick, which counted
+a whole second of virtual time for the ticks of the current second so far;
+the catch-up then slowed the clock until the guest had lost up to a second,
+at every throttle start.  The forced second now counts only its ticks.
+
+sim_timer.c is part of Open SIMH and carries its X11-style licence
+(Copyright (c) Robert M Supnik and the Open SIMH contributors); this patch
+is offered under the same terms.
+---
+diff --git a/sim_timer.c b/sim_timer.c
+index 333d26a..9764572 100644
+--- a/sim_timer.c
++++ b/sim_timer.c
+@@ -188,6 +188,7 @@ static double sim_throt_inst_start;
+ static uint32 sim_throt_sleep_time = 0;
+ static int32 sim_throt_wait = 0;
+ static uint32 sim_throt_delay = 3;
++static t_bool sim_throt_slept = FALSE;              /* throttle slept since the last calibration */
+ #define CLK_TPS 100
+ #define CLK_INIT (sim_precalibrate_ips/CLK_TPS)
+ static int32 sim_int_clk_tps;
+@@ -850,6 +851,7 @@ int32 delta_vtime;
+ double new_gtime;
+ int32 new_currd;
+ int32 itmr;
++t_bool throttled;
+ RTC *rtc;
+ 
+ if (tmr == SIM_INTERNAL_CLK)
+@@ -912,6 +914,8 @@ if (sim_calb_tmr != tmr) {
+     return rtc->currd;
+     }
+ new_rtime = sim_os_msec ();                         /* wall time */
++throttled = sim_throt_slept;                        /* throttle slept this second? */
++sim_throt_slept = FALSE;
+ if (!sim_signaled_int_char &&
+     ((new_rtime - sim_last_poll_kbd_time) > 500)) {
+     sim_debug (DBG_CAL, &sim_timer_dev, "sim_rtcn_calb(tmr=%d) gratuitous keyboard poll after %d msecs\n", tmr, (int)(new_rtime - sim_last_poll_kbd_time));
+@@ -970,7 +974,11 @@ if (tmr != SIM_NTIMERS) {
+         }
+     }
+ new_gtime = sim_gtime();
+-if ((last_idle_pct == 0) && (delta_rtime != 0)) {
++/* A second with throttle sleeps in its wall time measures the throttled
++   rate (about 1000 cycles/ms at SET THROTTLE 1M), not the one sim_idle
++   needs after SET NOTHROTTLE: an idle guest never has another busy second
++   to correct it, and idle sleeps sized with it stall the clock. */
++if ((last_idle_pct == 0) && (delta_rtime != 0) && !throttled) {
+     sim_idle_cyc_ms = (uint32)((new_gtime - rtc->gtime) / delta_rtime);
+     if ((sim_idle_rate_ms != 0) && (delta_rtime > 1))
+         sim_idle_cyc_sleep = (uint32)((new_gtime - rtc->gtime) / (delta_rtime / sim_idle_rate_ms));
+@@ -1601,9 +1609,18 @@ if ((!sim_idle_enab)                             ||     /* idling disabled */
+    */
+ sim_debug (DBG_TRC, &sim_timer_dev, "sim_idle(tmr=%d, sin_cyc=%d)\n", tmr, sin_cyc);
+ if (sim_idle_cyc_ms == 0) {
+-    sim_idle_cyc_ms = (rtc->currd * rtc->hz) / 1000;/* cycles per msec */
++    /* No calibration has measured the execution rate yet (only one with
++       less than 1% idle sets sim_idle_cyc_ms), so the timer's tick size may
++       still be its device's initial guess: the PDP-11 KW11-L's is 16667
++       cycles per 60Hz tick (1 MIPS), 50 times too small on current hosts.
++       Frozen here, it makes every idle sleep last many ticks as soon as the
++       tick calibrates to the real rate.  Prefer the precalibrated rate. */
++    uint32 cyc_per_sec = (sim_clock_precalibrate_commands != NULL) ?
++                         (uint32)sim_precalibrate_ips : (uint32)(rtc->currd * rtc->hz);
++
++    sim_idle_cyc_ms = cyc_per_sec / 1000;               /* cycles per msec */
+     if (sim_idle_rate_ms != 0)
+-        sim_idle_cyc_sleep = (rtc->currd * rtc->hz) / (1000 / sim_idle_rate_ms);/* cycles per minimum sleep */
++        sim_idle_cyc_sleep = cyc_per_sec / (1000 / sim_idle_rate_ms);/* cycles per minimum sleep */
+     }
+ if ((sim_idle_rate_ms == 0) || (sim_idle_cyc_ms == 0)) {/* not possible? */
+     sim_interval -= sin_cyc;
+@@ -1753,6 +1770,15 @@ else {
+         sim_throt_state = SIM_THROT_STATE_THROTTLE;         /* force state */
+         sim_throt_wait = sim_throt_val;
+         }
++    else {
++        /* Measure again, as at start-up: only the end of a measurement
++           sets the clocks' tick size to the throttled rate (sim_throt_svc,
++           _sim_timer_adjust_cal).  Resuming an earlier THROTTLE state, as
++           after SET NOTHROTTLE, would keep the tick size calibrated while
++           unthrottled, ~100 times too long: the clock would stall, every
++           calibration second discarded as "gap too big". */
++        sim_throt_state = SIM_THROT_STATE_INIT;
++        }
+     }
+ if (sim_throt_type == SIM_THROT_SPC) {  /* Set initial value while correct one is determined */
+     sim_throt_cps = (int32)((1000.0 * sim_throt_val) / (double)sim_throt_sleep_time);
+@@ -1820,6 +1846,8 @@ if (sim_throt_type != SIM_THROT_NONE) {
+     else {
+         /* Start calibration initially */
+         sim_throt_state = SIM_THROT_STATE_INIT;
++        sim_throt_ms_start = sim_os_msec ();            /* a restart with the clock */
++        sim_throt_inst_start = sim_gtime ();            /* calibrated measures from here */
+         sim_activate (&sim_throttle_unit, SIM_THROT_WINIT);
+         }
+     }
+@@ -1967,6 +1995,7 @@ switch (sim_throt_state) {
+ 
+     case SIM_THROT_STATE_THROTTLE:                      /* throttling */
+         sim_idle_ms_sleep (sim_throt_sleep_time);
++        sim_throt_slept = TRUE;                         /* no idle rate from this second */
+         delta_ms = sim_os_msec () - sim_throt_ms_start;
+         if (delta_ms >= 10000) {                        /* recompute every 10 sec */
+             double delta_insts = sim_gtime() - sim_throt_inst_start;
+@@ -2037,6 +2066,7 @@ static void _sim_timer_adjust_cal(void)
+ 
+         if (rtc->hz) {                                      /* running? */
+             rtc->currd = (int32)(sim_throt_cps / rtc->hz);/* use throttle calibration */
++            rtc->vtime -= ((rtc->hz - 1 - rtc->ticks) * 1000) / rtc->hz;/* forced second: its ticks only */
+             rtc->ticks = rtc->hz - 1;                     /* force clock calibration on next tick */
+             rtc->rtime = sim_throt_ms_start - 1000 + 1000/rtc->hz;/* adjust calibration parameters to reflect throttled rate */
+             rtc->gtime = sim_throt_inst_start - sim_throt_cps + sim_throt_cps/rtc->hz;
+@@ -2541,7 +2571,8 @@ return SCPE_OK;
+ void sim_start_timer_services (void)
+ {
+ int32 tmr;
+-uint32 sim_prompt_time = (sim_gtime () > 0) ? (sim_os_msec () - sim_stop_time) : 0;
++uint32 sim_stopped_time = sim_os_msec () - sim_stop_time;
++uint32 sim_prompt_time = (sim_gtime () > 0) ? sim_stopped_time : 0;
+ int32 registered_units = 0;
+ 
+ sim_time_at_sim_prompt +=  (((double)sim_prompt_time) / 1000.0);
+@@ -2549,11 +2580,16 @@ for (tmr=0; tmr<=SIM_NTIMERS; tmr++) {
+     RTC *rtc = &rtcs[tmr];
+ 
+     if (rtc->initd) {                /* calibrated clock initialized? */
+-        rtc->rtime += sim_prompt_time;
+-        rtc->vtime += sim_prompt_time;
+-        sim_debug (DBG_CAL, &sim_timer_dev, "sim_start_timer_services(tmr=%d) - adjusting calibration real time by %d ms\n", tmr, (int)sim_prompt_time);
++        /* The time stopped, also before BOOT, GO and RUN, which zero
++           sim_gtime (): their device resets set a clock's calibration
++           start to sim_stop_time, and its first calibration second would
++           otherwise include the time at the prompt and measure the
++           execution rate (sim_idle_cyc_ms too) that many times too low. */
++        rtc->rtime += sim_stopped_time;
++        rtc->vtime += sim_stopped_time;
++        sim_debug (DBG_CAL, &sim_timer_dev, "sim_start_timer_services(tmr=%d) - adjusting calibration real time by %d ms\n", tmr, (int)sim_stopped_time);
+         if (rtc->clock_catchup_eligible)
+-            rtc->calib_tick_time += (((double)sim_prompt_time) / 1000.0);
++            rtc->calib_tick_time += (((double)sim_stopped_time) / 1000.0);
+         if (rtc->clock_unit)
+             ++registered_units;
+         }

@@ -1,0 +1,100 @@
+{
+  "id": "bsd211-pl499",
+  "name": "2.11BSD (patch level 499)",
+  "short": "2.11BSD pl499",
+  "category": "unix",
+  "order": 11,
+  "description": "The newest 2.11BSD: patch level 499 of January 2026, built by Johnny Billquist, who maintains the official 2.11BSD patches (kernel \"pidp\", 1 GB RA82 disk). The same system as the default 2.11BSD entry with two more years of fixes. It is downloaded by FTP from ftp.dfupdate.se; if that file is ever replaced upstream, the checksum no longer matches and the install stops with an error.",
+  "license": {
+    "name": "BSD licence + Caldera \"Ancient UNIX\" licence",
+    "class": "redistributable",
+    "file": "LICENSE.txt",
+    "summary": "Free to use, modify and redistribute: 2.11BSD is under the University of California's BSD licence, the code derived from UNIX V6/V7 under Caldera's 2002 Ancient UNIX licence. Keep the copyright notices."
+  },
+  "credentials": [
+    {
+      "user": "root",
+      "password": "",
+      "note": "no password"
+    }
+  ],
+  "shutdown": "Log in as root and type shutdown -h now: 2.11BSD syncs the disks, prints \"halting\" and halts the CPU, and the machine can be switched off. Shut down OS does this for you (it logs in as root first if the console shows login:).",
+  "shutdownScript": [
+    {
+      "send": "root\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# ",
+      "send": "shutdown -h now\r"
+    }
+  ],
+  "notes": "## Log in\n\nLog in as **root** (no password); set a password with `passwd` if others can reach this machine.\n\nThe PDP-11/70 has no battery clock and there is no network, so the clock starts at the date stored on the disk (May 2026). Set it as root with `date yymmddhhmm`, e.g. `date 2610221530`.\n\n## Things to try\n\n* `uname -a`, `cat /VERSION`, `df`, `ps ax`, `who`: a BSD UNIX from 1992, patched until 2026.\n* Write a C program and compile it:\n\n  ```\n  cat > hello.c\n  main() { printf(\"hello, world\\n\"); }\n  ```\n\n  then Ctrl+D, `cc -o hello hello.c` and `./hello`. `f77` compiles Fortran.\n* Games in `/usr/games`: `adventure`, `zork`, `hack`, `trek`, `rain`, `worms`, `wump`, `backgammon`, `fortune` and more (`ls /usr/games`).\n* Editors: Bill Joy's original `vi` and the Emacs-like `jove`; `man vi` shows the manual.\n* The front panel: turn the DATA knob to DATA PATHS. While 2.11BSD idles, its idle loop rotates a band of 8 lit bits through R0 before every WAIT, and the panel shows R0 during WAIT. Read the idle loop in `/usr/src/sys/pdp/mch_xxx.s` (search for `rdisply`).\n* The kernel configuration is `/usr/src/sys/conf/pidp`; the whole system source is in `/usr/src`.\n\n## Shut down\n\nAs root type `shutdown -h now`. 2.11BSD stops its daemons, syncs the disks, prints \"halting\" and halts the CPU (HALT instruction); then switch off. If you pull the plug instead, the next boot repairs the file systems (fsck) and reboots once by itself, which takes about 20 seconds longer.\n",
+  "cpu": {
+    "memory": "4M"
+  },
+  "speed": "fast",
+  "boot": "boot rq0",
+  "readyPattern": "login: ",
+  "bootTimeoutSec": 90,
+  "console": {
+    "backspace": "del",
+    "interrupt": "ctrl-c",
+    "keyHelp": "Backspace erases · Ctrl+U kills the line · Ctrl+C interrupts · Ctrl+Z suspends (csh) · Ctrl+D logs out"
+  },
+  "terminals": {
+    "device": "dz",
+    "lines": 8,
+    "modem": true,
+    "enableHint": "/etc/ttys ships with the DZ11 lines tty00-tty07 switched off. Switch them on once as root: sed -e '/^tty0[0-7]/s/off/on/' /etc/ttys > /tmp/ttys && cp /tmp/ttys /etc/ttys && kill -HUP 1 - then telnet to the listener and log in. Log out (Ctrl+D) before closing the telnet connection: closing it hangs up the line (modem control), but 2.11BSD notices that only about once a second, and a new connection within that time gets the old, still logged-in session."
+  },
+  "artifacts": [
+    {
+      "url": "ftp://ftp.dfupdate.se/pub/pdp11/2.11BSD/pidp-pl499.dsk.gz",
+      "mirrors": [],
+      "sha256": "634d0626d898bdaa14070acd8671c09f5d587c8ed96b9e970f9f0806c40a8e7b",
+      "size": 47883044,
+      "format": "gz",
+      "files": [
+        {
+          "path": "pidp-pl499.dsk",
+          "role": "DISK0",
+          "sha256": "8e367779b51c0d246a283fb9772450d4ed8747892e764fcc2188c34b7e4eb8fe",
+          "size": 1024458752,
+          "sparse": true
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "session": [
+      {
+        "send": "root\r"
+      },
+      {
+        "expect": "# ",
+        "send": "uname -a\r"
+      },
+      {
+        "expect": "2.11 BSD UNIX #5"
+      },
+      {
+        "expect": "# ",
+        "send": "echo 'main(){printf(\"hello from %s\\n\", \"C\");}' > /tmp/hello.c && cc -o /tmp/hello /tmp/hello.c && /tmp/hello\r"
+      },
+      {
+        "expect": "hello from C"
+      },
+      {
+        "expect": "# ",
+        "send": "ls /usr/games | wc -l\r"
+      },
+      {
+        "expect": "# "
+      }
+    ]
+  }
+}

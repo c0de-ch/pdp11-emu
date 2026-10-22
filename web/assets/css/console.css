@@ -1,0 +1,165 @@
+/* Console terminal: Glass TTY VT220 (Unlicense) and VT323 (OFL) for
+   non-integer scaling; phosphor colours come from --phosphor/-bg. */
+
+@font-face {
+  font-family: "Glass TTY VT220";
+  src: url("../fonts/glass-tty-vt220.woff2") format("woff2");
+  font-display: block;
+}
+
+@font-face {
+  font-family: "VT323";
+  src: url("../fonts/vt323.woff2") format("woff2");
+  font-display: block;
+}
+
+.console-area {
+  --phosphor: #33ff66;
+  --phosphor-bg: #041208;
+}
+
+/* the key help gives way first; when even the buttons do not fit (a narrow
+   console during a paste), they wrap onto a second line (main.js measures it) */
+.console-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-height: 34px;
+  padding: 0 2px 6px;
+  font-size: 13px;
+}
+
+.console-head .title {
+  font-weight: 600;
+}
+
+.console-head .keyhelp {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-head .toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.console-head .paste-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.console-head .btn {
+  height: 26px;
+  padding: 0 9px;
+}
+
+.console-host {
+  position: relative;
+  flex: none;
+}
+
+.console-frame {
+  position: relative;
+  display: inline-block;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--phosphor-bg);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.02);
+  transition: box-shadow 120ms ease-out;
+}
+
+.console-frame.focused {
+  border-color: #2f3a46;
+}
+
+.console-frame.bell {
+  box-shadow: inset 0 0 0 2px var(--phosphor), 0 0 18px color-mix(in srgb, var(--phosphor) 45%, transparent);
+  transition: none;
+}
+
+.console-screen {
+  position: relative;
+  /* xterm.js moves its invisible input textarea only when the cursor moves:
+     after a font change it can stick out below the screen (page overflow) */
+  overflow: clip;
+}
+
+/* xterm.js 6 draws its scrollbar over the right edge of the text; with a
+   fixed 80/132-column screen give it a gutter of its own (SCROLLBAR in console.js) */
+.console-screen .xterm {
+  width: max-content;
+}
+
+.console-screen .xterm-scrollable-element {
+  padding-right: 14px;
+}
+
+/* xterm.js: opaque phosphor background, no scrollbar gutter tint */
+.console-screen .xterm .xterm-viewport {
+  background-color: var(--phosphor-bg) !important;
+  scrollbar-color: color-mix(in srgb, var(--phosphor) 30%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.console-screen .xterm:focus,
+.console-screen .xterm .xterm-helper-textarea:focus {
+  outline: none;
+}
+
+/* CRT effect (DOM renderer only): glow on the text, vignette over the glass.
+   Never curvature or flicker (r4 §5.3). */
+.console-frame.crt .xterm-rows {
+  text-shadow: 0 0 1px var(--phosphor), 0 0 5px color-mix(in srgb, var(--phosphor) 45%, transparent);
+}
+
+.crt-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.console-frame.crt .crt-overlay {
+  opacity: 1;
+  background: radial-gradient(ellipse at center, transparent 62%, rgb(0 0 0 / 0.42));
+  box-shadow: inset 0 0 24px rgb(0 0 0 / 0.55);
+}
+
+.console-hint {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 0.55);
+  color: color-mix(in srgb, var(--phosphor) 75%, #fff);
+  font: 12px var(--font-ui);
+  pointer-events: none;
+  opacity: 0.85;
+  transition: opacity 150ms;
+}
+
+.console-frame.focused .console-hint {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-frame,
+  .console-hint {
+    transition: none;
+  }
+}

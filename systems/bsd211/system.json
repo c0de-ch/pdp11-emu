@@ -1,0 +1,101 @@
+{
+  "id": "bsd211",
+  "name": "2.11BSD (patch level 482)",
+  "short": "2.11BSD",
+  "category": "unix",
+  "default": true,
+  "order": 10,
+  "description": "Berkeley's 1992 BSD UNIX for the PDP-11, brought up to patch level 482 (2024) in Chase Covello's PiDP-11 distribution: a multi-user UNIX with the Bourne and C shells, vi, the C and Fortran compilers, man pages, dozens of games and the complete system source in /usr/src. It boots straight to multi-user on a 1 GB RA82 disk in about ten seconds.",
+  "license": {
+    "name": "BSD licence + Caldera \"Ancient UNIX\" licence",
+    "class": "redistributable",
+    "file": "LICENSE.txt",
+    "summary": "Free to use, modify and redistribute: 2.11BSD is under the University of California's BSD licence, the code derived from UNIX V6/V7 under Caldera's 2002 Ancient UNIX licence. Keep the copyright notices."
+  },
+  "credentials": [
+    {
+      "user": "root",
+      "password": "",
+      "note": "no password; user and tektronix have none either"
+    }
+  ],
+  "shutdown": "Log in as root and type shutdown -h now: 2.11BSD syncs the disks, prints \"halting\" and halts the CPU, and the machine can be switched off. Shut down OS does this for you (it logs in as root first if the console shows login:).",
+  "shutdownScript": [
+    {
+      "send": "root\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# ",
+      "send": "shutdown -h now\r"
+    }
+  ],
+  "notes": "## Log in\n\nLog in as **root** (no password). The accounts **user** and **tektronix** have no password either; set passwords with `passwd` if others can reach this machine.\n\nThe PDP-11/70 has no battery clock and there is no network, so the clock starts at the date stored on the disk (March 2025). Set it as root with `date yymmddhhmm`, e.g. `date 2610221530`.\n\n## Things to try\n\n* `uname -a`, `cat /VERSION`, `df`, `ps ax`, `who`: a BSD UNIX from 1992, patched until 2024.\n* Write a C program and compile it:\n\n  ```\n  cat > hello.c\n  main() { printf(\"hello, world\\n\"); }\n  ```\n\n  then Ctrl+D, `cc -o hello hello.c` and `./hello`. `f77` compiles Fortran.\n* Games in `/usr/games`: `adventure`, `zork`, `hack`, `trek`, `rain`, `worms`, `wump`, `backgammon`, `fortune` and more (`ls /usr/games`).\n* Editors: Bill Joy's original `vi` and the Emacs-like `jove`; `man vi` shows the manual.\n* The front panel: turn the DATA knob to DATA PATHS. While 2.11BSD idles, its idle loop rotates a band of 8 lit bits through R0 before every WAIT, and the panel shows R0 during WAIT. Read the idle loop in `/usr/src/sys/pdp/mch_xxx.s` (search for `rdisply`); `mch_xxx.s.alt-light-pattern` next to it is a bouncing variant you could build into a new kernel.\n* The kernel configuration is `/usr/src/sys/conf/PIDP11`; the whole system source is in `/usr/src`, the source of the extra programs in `/home/user/src`.\n\n## Shut down\n\nAs root type `shutdown -h now`. 2.11BSD stops its daemons, syncs the disks, prints \"halting\" and halts the CPU (HALT instruction); then switch off. If you pull the plug instead, the next boot repairs the file systems (fsck) and reboots once by itself, which takes about 20 seconds longer.\n",
+  "cpu": {
+    "memory": "4M"
+  },
+  "speed": "fast",
+  "boot": "boot rq0",
+  "readyPattern": "login: ",
+  "bootTimeoutSec": 90,
+  "console": {
+    "backspace": "del",
+    "interrupt": "ctrl-c",
+    "keyHelp": "Backspace erases · Ctrl+U kills the line · Ctrl+C interrupts · Ctrl+Z suspends (csh) · Ctrl+D logs out"
+  },
+  "terminals": {
+    "device": "dz",
+    "lines": 8,
+    "modem": true,
+    "enableHint": "2.11BSD already runs a getty on all eight DZ11 lines (tty00-tty07 are on in /etc/ttys): telnet to the listener and log in as root. Log out (Ctrl+D) before closing the telnet connection: closing it hangs up the line (modem control), but 2.11BSD notices that only about once a second, and a new connection within that time gets the old, still logged-in session."
+  },
+  "artifacts": [
+    {
+      "url": "https://raw.githubusercontent.com/chasecovello/211bsd-pidp11/b054907c6c5dd507a387c62e7e4b2dd48e284ad1/2.11BSD_rq.dsk.xz",
+      "mirrors": [],
+      "sha256": "b3e6b8321e6e1ec28e1aebdef4282d6596bc1691ad9600fcac8072a8a119f1d0",
+      "size": 24201968,
+      "format": "xz",
+      "files": [
+        {
+          "path": "2.11BSD_rq.dsk",
+          "role": "DISK0",
+          "sha256": "ddd69727f4c0d379d8ecabcb62d8a39a10db287fe9721761761c4f4058117abf",
+          "size": 1000448512,
+          "sparse": true
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "session": [
+      {
+        "send": "root\r"
+      },
+      {
+        "expect": "# ",
+        "send": "uname -a\r"
+      },
+      {
+        "expect": "2.11 BSD UNIX #21"
+      },
+      {
+        "expect": "# ",
+        "send": "echo 'main(){printf(\"hello from %s\\n\", \"C\");}' > /tmp/hello.c && cc -o /tmp/hello /tmp/hello.c && /tmp/hello\r"
+      },
+      {
+        "expect": "hello from C"
+      },
+      {
+        "expect": "# ",
+        "send": "ls /usr/games | wc -l\r"
+      },
+      {
+        "expect": "# "
+      }
+    ]
+  }
+}

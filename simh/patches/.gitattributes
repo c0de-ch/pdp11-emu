@@ -1,0 +1,3 @@
+# The patches contain CRLF lines (Open SIMH stores these files with CRLF):
+# never convert line endings.
+*.patch -text

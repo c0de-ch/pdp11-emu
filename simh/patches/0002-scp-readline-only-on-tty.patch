@@ -1,0 +1,56 @@
+From: pdp11-emu authors
+Subject: [PATCH 2/3] SCP: use libedit's readline() only on a terminal
+
+read_line_p() calls readline() whenever SimH was built with libedit
+(HAVE_EDITLINE).  When stdin is a pipe, libedit does not print the prompt,
+so a program driving SCP through pipes never sees "sim> ".  Use readline()
+only when sim_ttisatty(); otherwise print the prompt, fflush and fgets() as
+the build without libedit does.  Command history is kept only for terminal
+input.
+
+scp.c is part of Open SIMH and carries its X11-style licence (Copyright (c)
+Robert M Supnik and the Open SIMH contributors); this patch is offered under
+the same terms.
+---
+diff --git a/scp.c b/scp.c
+index 9f2eced..ba412e0 100644
+--- a/scp.c
++++ b/scp.c
+@@ -10325,9 +10325,12 @@ return read_line_p (NULL, cptr, size, stream);
+ char *read_line_p (const char *prompt, char *cptr, int32 size, FILE *stream)
+ {
+ char *tptr;
++#if defined(HAVE_EDITLINE)
++t_bool edit = (prompt != NULL) && sim_ttisatty ();      /* edit only on a terminal */
++#endif
+ 
+ #if defined(HAVE_EDITLINE)
+-if (prompt) {                                           /* interactive? */
++if (edit) {                                             /* interactive? */
+     char *tmpc = readline (prompt);                     /* get cmd line */
+     if (tmpc == NULL)                                   /* bad result? */
+         cptr = NULL;
+@@ -10336,7 +10339,13 @@ if (prompt) {                                           /* interactive? */
+         free (tmpc) ;                                   /* free temp */
+         }
+     }
+-else cptr = fgets (cptr, size, stream);                 /* get cmd line */
++else {                                                  /* pipe or file: */
++    if (prompt) {                                       /* libedit would not */
++        printf ("%s", prompt);                          /* display the prompt */
++        fflush (stdout);
++        }
++    cptr = fgets (cptr, size, stream);                  /* get cmd line */
++    }
+ #else
+ if (prompt) {                                           /* interactive? */
+     printf ("%s", prompt);                              /* display prompt */
+@@ -10368,7 +10377,7 @@ if ((*cptr == ';') || (*cptr == '#')) {                 /* ignore comment */
+     }
+ 
+ #if defined (HAVE_EDITLINE)
+-if (prompt && *cptr)                   /* Save non blank lines in history */
++if (edit && *cptr)                     /* Save non blank lines in history */
+     add_history (cptr);
+ #endif
+ return cptr;

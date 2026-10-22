@@ -1,0 +1,125 @@
+{
+  "id": "rsts",
+  "name": "RSTS/E V7.0",
+  "short": "RSTS/E",
+  "category": "dec",
+  "order": 70,
+  "description": "DEC's time-sharing system (V7.0, 1979) built around BASIC-PLUS: log in, type BASIC statements and RUN them, the way schools and businesses used their PDP-11s. Chuck Cranor's ready-made system from the SimH software kits, on two RL01 disks; while it idles its null job rotates a band of bits across the DATA PATHS lamps.",
+  "license": {
+    "name": "Mentec PDP-11 hobbyist licence",
+    "class": "hobbyist",
+    "file": "LICENSE.txt",
+    "summary": "Personal, non-commercial use only, on a PDP-11 emulator (Mentec's licence for RT-11 V5.3, RSTS/E V9.6, RSX-11M V4.3, RSX-11M-PLUS V3.0 and earlier). It does not allow redistribution, so the disk image is downloaded from its original source after you accept the licence."
+  },
+  "credentials": [
+    {
+      "user": "1,2",
+      "password": "SYSTEM",
+      "note": "type HELLO 1,2, then press Return at \"Job number to attach to?\""
+    }
+  ],
+  "shutdown": "Log in as 1,2, type RUN $SHUTUP, press Return twice and answer 0 minutes: RSTS ends its jobs, dismounts the disks and restarts into INIT's \"Option:\" prompt, where it is safe to switch off.",
+  "shutdownScript": [
+    {
+      "send": "HELLO 1,2\r"
+    },
+    {
+      "expect": "Password:",
+      "send": "SYSTEM\r"
+    },
+    {
+      "expect": "Job number to attach to? ",
+      "send": "\r"
+    },
+    {
+      "expect": "Ready",
+      "send": "RUN $SHUTUP\r"
+    },
+    {
+      "expect": "Use 'OPSER' for utilities shutdown (YES/NO) <YES>",
+      "send": "\r"
+    },
+    {
+      "expect": "Allow utilities to reach logical end point (YES/NO) <YES>?",
+      "send": "\r"
+    },
+    {
+      "expect": "Minutes until system shutdown (0-99) <5>?",
+      "send": "0\r"
+    },
+    {
+      "expect": "Option: ",
+      "timeoutSec": 120
+    }
+  ],
+  "notes": "## Log in\n\nAfter the boot the console shows no prompt (the last line is \"Detaching . . .\"): type `HELLO 1,2`, the password `SYSTEM`, and press Return at \"Job number to attach to?\" to start a new job. `Ready` is the prompt; `BYE/F` logs out. The boot sets the date and time; RSTS/E V7 is not Y2K-ready, so the year is the 19xx year whose calendar matches today's.\n\n## Things to try\n\n* BASIC-PLUS is the command language: `PRINT 6*7`, or type a program and `RUN` it:\n\n  ```\n  10 PRINT \"HELLO FROM BASIC-PLUS\"\n  20 FOR I = 1 TO 5 \\ PRINT I, I*I \\ NEXT I\n  RUN\n  ```\n\n  `LIST` shows the program, `NEW NAME` starts a new one, `CAT` lists the account's files.\n* `SYSTAT` shows the jobs, disks and run-time systems (BASIC, RT11, RSX, TECO).\n* `TECO` is the editor of the era (prompt `*`); leave it with `EX` and two Escapes.\n* The idle pattern: turn the DATA knob to DATA PATHS. RSTS's null job rotates a band of lit bits through R0 while it waits, and the panel shows R0 during WAIT.\n\n## Shut down\n\nAs 1,2: `RUN $SHUTUP`, Return twice (YES, YES) and `0` minutes. RSTS ends all jobs, dismounts the disks and restarts itself into INIT's `Option:` prompt: switch off there.\n",
+  "cpu": {
+    "memory": "1M"
+  },
+  "speed": "fast",
+  "boot": "boot rl0",
+  "readyPattern": "Detaching . . .",
+  "bootTimeoutSec": 60,
+  "console": {
+    "backspace": "del",
+    "interrupt": "ctrl-c",
+    "keyHelp": "Log in with HELLO 1,2 (password SYSTEM) · Backspace (DEL) erases · Ctrl+U deletes the line · Ctrl+C interrupts"
+  },
+  "artifacts": [
+    {
+      "url": "https://simh.trailing-edge.com/kits/rstsv7swre.tar.Z",
+      "mirrors": [
+        "https://web.archive.org/web/20250704114702id_/https://simh.trailing-edge.com/kits/rstsv7swre.tar.Z"
+      ],
+      "sha256": "23e6ff60597ebd5946cf2eb748a4294e736e33c49033a186997697cfab436069",
+      "size": 4940043,
+      "format": "tarZ",
+      "files": [
+        {
+          "path": "Disks/rsts_full_rl.dsk",
+          "role": "DISK0",
+          "sha256": "686291135714664706df06691b6768cd7c6feb575d9ff73d7bc196a1b136298d",
+          "size": 5235200
+        },
+        {
+          "path": "Disks/rsts_swap_rl.dsk",
+          "role": "DISK1",
+          "sha256": "009ee782fce3727734f2dbe3cfadb370295e489b4c45ad84647e18d46c230bac",
+          "size": 5235200
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "session": [
+      {
+        "send": "HELLO 1,2\r"
+      },
+      {
+        "expect": "Password:",
+        "send": "SYSTEM\r"
+      },
+      {
+        "expect": "Job number to attach to? ",
+        "send": "\r"
+      },
+      {
+        "expect": "Ready",
+        "send": "PRINT 6*7\r"
+      },
+      {
+        "expect": " 42 "
+      },
+      {
+        "expect": "Ready",
+        "send": "SYSTAT\r"
+      },
+      {
+        "expect": "RSTS V7.0-07 llama status"
+      },
+      {
+        "expect": "Ready"
+      }
+    ]
+  }
+}

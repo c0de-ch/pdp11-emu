@@ -1,0 +1,125 @@
+{
+  "id": "unixv6",
+  "name": "UNIX Sixth Edition",
+  "short": "UNIX V6",
+  "category": "unix",
+  "order": 30,
+  "description": "Bell Labs Research UNIX, Sixth Edition (1975), the UNIX of John Lions' famous commentary: a complete time-sharing system that fits in a few hundred kilobytes. The SimH software kit: four RK05 packs with the root, /usr and the source of the commands in /usr/source; the 11/45-11/70 kernel /rkunix boots straight to multi-user.",
+  "license": {
+    "name": "Caldera \"Ancient UNIX\" licence (2002)",
+    "class": "redistributable",
+    "file": "LICENSE.txt",
+    "summary": "Free to use, modify and redistribute: Caldera's 2002 BSD-style licence for UNIX Versions 1-7 and 32V (keep the copyright notice and the acknowledgement)."
+  },
+  "credentials": [
+    {
+      "user": "root",
+      "password": "",
+      "note": "no password"
+    }
+  ],
+  "shutdown": "V6 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you (logging in as root first if needed).",
+  "shutdownScript": [
+    {
+      "send": "root\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# "
+    }
+  ],
+  "notes": "## Log in\n\nLog in as **root** (no password). **#** erases the last character and **@** kills the line (the console's Backspace key sends # for you), DEL interrupts (Ctrl+C sends DEL), Ctrl+D ends input; `\\#` and `\\@` type the characters themselves. This is the Thompson shell: `chdir` instead of `cd`.\n\n## Things to try\n\n* First repair the root file system, once: the kit's disk image has a damaged free list (`icheck /dev/rk0` reports `3 dups in free`), so new files share disk blocks and the C compiler fails with \"Intermediate file error\". Type `sync`, then `icheck -s /dev/rrk0`, and pull the plug right away (key OFF and choose \"Pull the plug\", not \"Shut down\": a sync would write the kernel's old free list back), then power on again. Afterwards `icheck /dev/rk0` is clean.\n* Then compile C: `chdir /tmp`, `cat > hello.c`, type `main() { printf(\"hello, world\\n\"); }`, press Ctrl+D, then `cc hello.c` and `a.out`.\n* `bas` is a BASIC interpreter: `10 print \"hello\"`, `run`, then Ctrl+D to leave.\n* Games in `/usr/games`: `chess`, `bj` (blackjack), `moo`, `ttt`, `cubic` and `wump`.\n* `ed` is the editor; `/usr/source` holds the source of the commands (the kernel source is not on these packs).\n* The display register: the 11/45-11/70 kernel copies the word at the address set in the switch register into the DISPLAY REGISTER on every clock tick. Turn the DATA knob to DISPLAY REGISTER and set the switches to 004670 to watch the tick counter `lbolt`, or to 004674 for the seconds (`nm /rkunix` lists the kernel's variables).\n\n## Shut down\n\nThere is no shutdown or halt command: type `sync` three times, wait a few seconds and switch off.\n",
+  "cpu": {
+    "memory": "1M"
+  },
+  "speed": "fast",
+  "boot": "boot rk0",
+  "readyPattern": "login: ",
+  "bootTimeoutSec": 30,
+  "console": {
+    "backspace": "#",
+    "interrupt": "del",
+    "keyHelp": "Backspace sends # (erase) · @ kills the line · Ctrl+C sends DEL (interrupt) · Ctrl+D ends input"
+  },
+  "artifacts": [
+    {
+      "url": "https://simh.trailing-edge.com/kits/uv6swre.zip",
+      "mirrors": [
+        "https://web.archive.org/web/20260222005831id_/http://simh.trailing-edge.com/kits/uv6swre.zip"
+      ],
+      "sha256": "7bb16343d280a888bbc387719e8e7a5c5c4aef0af368b0e9ef903aa692a26b91",
+      "size": 1549757,
+      "format": "zip",
+      "files": [
+        {
+          "path": "unix0_v6_rk.dsk",
+          "role": "DISK0",
+          "sha256": "26d8885f4b0500f12174f5b9e5b484a230585593e8ad1767d82ce9db8b955afa",
+          "size": 2077696
+        },
+        {
+          "path": "unix1_v6_rk.dsk",
+          "role": "DISK1",
+          "sha256": "7a730aedc5f78f4f7b910994a0b1bec4bd05eb22e0fde043b08efd4439b75e17",
+          "size": 2440704
+        },
+        {
+          "path": "unix2_v6_rk.dsk",
+          "role": "DISK2",
+          "sha256": "8b6efcbd8aaaca0c997d0f158d7275069c3a38f8892f039f7831b9a4d4f13271",
+          "size": 2440704
+        },
+        {
+          "path": "unix3_v6_rk.dsk",
+          "role": "DISK3",
+          "sha256": "fa57755b83d8f3d051c5fb8c94f5c884fb9db0ea23b6ff82f92d990c72e29231",
+          "size": 2440704
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "session": [
+      {
+        "send": "root\r"
+      },
+      {
+        "expect": "# ",
+        "send": "ls /usr/games\r"
+      },
+      {
+        "expect": "wump"
+      },
+      {
+        "expect": "# ",
+        "send": "bas\r"
+      },
+      {
+        "send": "10 print 6*7\r"
+      },
+      {
+        "send": "run\r"
+      },
+      {
+        "expect": "42"
+      },
+      {
+        "send": "\u0004"
+      },
+      {
+        "expect": "# "
+      }
+    ]
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "id": "rsx11mp",
+  "name": "RSX-11M-PLUS V3.0",
+  "short": "RSX-11M-PLUS",
+  "category": "dec",
+  "order": 60,
+  "description": "DEC's multi-user, multi-tasking real-time operating system for the large PDP-11s (V3.0, 1985), with the MCR command line, the EDT editor, MACRO-11 and the task builder. The w11 project's RP06 system disk; the console comes up logged in. Its idle loop is the famous one: on the DATA PATHS lamps two groups of lit bits sweep towards each other while the CPU waits.",
+  "license": {
+    "name": "Mentec PDP-11 hobbyist licence",
+    "class": "hobbyist",
+    "file": "LICENSE.txt",
+    "summary": "Personal, non-commercial use only, on a PDP-11 emulator (Mentec's licence for RT-11 V5.3, RSTS/E V9.6, RSX-11M V4.3, RSX-11M-PLUS V3.0 and earlier). It does not allow redistribution, so the disk image is downloaded from its original source after you accept the licence."
+  },
+  "noLogin": true,
+  "shutdown": "Type RUN $SHUTUP and answer 0 (minutes to wait), Return (no reason) and Y: RSX stops its tasks, dismounts the disk, prints \"SHUTUP operation complete\" and halts the CPU.",
+  "shutdownScript": [
+    {
+      "send": "\r"
+    },
+    {
+      "expect": ">",
+      "send": "RUN $SHUTUP\r"
+    },
+    {
+      "expect": "Enter minutes to wait before shutdown:",
+      "send": "0\r"
+    },
+    {
+      "expect": "Reason for shutdown (<CR> for none):",
+      "send": "\r"
+    },
+    {
+      "expect": "OK to shutdown? [Y/N]:",
+      "send": "Y\r"
+    }
+  ],
+  "notes": "## Log in\n\nNo login needed: the console (TT0:) comes up logged in as the privileged user [200,200] with the MCR command line, prompt `>`. On the console `HEL` means HELP, not HELLO. The accounts for the terminal lines are **SYSTEM** / **SYSTEM** ([1,1], privileged) and **USER** / **USER** ([200,1]): `HELLO SYSTEM`. The boot sets the date and time; V3.0 is not Y2K-ready, so the year is the 19xx year whose calendar matches today's.\n\n## Things to try\n\n* MCR commands: `TIM` (date and time), `DEV` (devices), `ACT /ALL` (active tasks), `SHO DEF`, `RMD` (resource monitor), `BRO TI:\"HELLO\"`, `HELP` and `HELP LIST` (the help topics, e.g. `HELP PIP`).\n* Files: `PIP [1,2]*.*/LI` lists a directory, `TYP LB:[1,2]LOGIN.TXT` types a file, `RUN $ACNT` manages the accounts.\n* Assemble and build a task: `PIP HELLO.MAC=TI:`, type the program, press Ctrl+Z, then `INS $MAC`, `INS $TKB`, `MAC HELLO=HELLO`, `TKB HELLO=HELLO` and `RUN HELLO`:\n\n  ```\n          .TITLE  HELLO\n          .MCALL  QIOW$S,EXIT$S\n  START:  QIOW$S  #IO.WVB,#5,#1,,,,<#MSG,#MSGL,#40>\n          EXIT$S\n  MSG:    .ASCII  /Hello from RSX-11M-PLUS!/\n  MSGL    = .-MSG\n          .EVEN\n          .END    START\n  ```\n* The idle pattern: turn the DATA knob to DATA PATHS. While RSX waits for work, its idle loop moves the classic pattern through R0 - two groups of lit bits that run towards each other and apart again - and the panel shows R0 during WAIT.\n\n## Shut down\n\n`RUN $SHUTUP`, then answer `0` (minutes to wait), Return (no reason) and `Y`. RSX stops its tasks, dismounts the disk, prints \"SHUTUP operation complete\" and halts the CPU (HALT instruction).\n",
+  "cpu": {
+    "memory": "4M"
+  },
+  "speed": "fast",
+  "boot": "boot rp0",
+  "readyPattern": "@ <EOF>",
+  "bootTimeoutSec": 60,
+  "console": {
+    "backspace": "del",
+    "interrupt": "ctrl-c",
+    "keyHelp": "Backspace (DEL) erases · Ctrl+U deletes the line · Ctrl+C gets the MCR> prompt · Ctrl+Z ends input to a utility"
+  },
+  "terminals": {
+    "device": "dz",
+    "lines": 8,
+    "enableHint": "The DZ11 lines are TT2:-TT11:. Telnet to the listener, press Return at the > prompt and log in with HELLO SYSTEM (password SYSTEM) or HELLO USER (password USER). Log out with BYE: the lines have no modem control (RSX V3.0 never raises DTR), so closing the telnet connection leaves the session logged in for the next caller."
+  },
+  "artifacts": [
+    {
+      "url": "https://www.retro11.de/data/oc_w11/oskits/rsx11mp-30_rpset.tgz",
+      "mirrors": [
+        "https://web.archive.org/web/20250827233651id_/http://www.retro11.de/data/oc_w11/oskits/rsx11mp-30_rpset.tgz"
+      ],
+      "sha256": "4fa5d3a9ce6a10d1fc9bf23a0289fe03e0039a58f226fc7c60ba618afe7ab5fd",
+      "size": 13170097,
+      "format": "tgz",
+      "files": [
+        {
+          "path": "./rsx11mp-30.dsk",
+          "role": "DISK0",
+          "sha256": "b1c02788d76348a40fca9672eba4e6d20e95ea81d50a80a00a128b71227f1750",
+          "size": 174416896,
+          "sparse": true
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "session": [
+      {
+        "expect": "\n>",
+        "send": "PIP HELLO.MAC=TI:\r"
+      },
+      {
+        "expect": "\n",
+        "send": "        .TITLE  HELLO\r        .MCALL  QIOW$S,EXIT$S\rSTART:  QIOW$S  #IO.WVB,#5,#1,,,,<#MSG,#MSGL,#40>\r        EXIT$S\rMSG:    .ASCII  /Hello from RSX-11M-PLUS!/\rMSGL    = .-MSG\r        .EVEN\r        .END    START\r\u001a"
+      },
+      {
+        "expect": "\n>",
+        "send": "INS $MAC\r"
+      },
+      {
+        "expect": "\n>",
+        "send": "INS $TKB\r"
+      },
+      {
+        "expect": "\n>",
+        "send": "MAC HELLO=HELLO\r",
+        "timeoutSec": 60
+      },
+      {
+        "expect": "\n>",
+        "send": "TKB HELLO=HELLO\r",
+        "timeoutSec": 60
+      },
+      {
+        "expect": "\n>",
+        "send": "RUN HELLO\r"
+      },
+      {
+        "expect": "HELLO FROM RSX-11M-PLUS!"
+      },
+      {
+        "expect": "\n>"
+      }
+    ]
+  }
+}

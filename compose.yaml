@@ -1,0 +1,62 @@
+# PDP-11/70 appliance with Docker Compose (README.md "Quick start: Docker").
+# Needs Docker Engine 23+ with BuildKit (buildx) and Compose v2.
+#
+#   cp .env.example .env     # optional: password, time zone, ports
+#   docker compose up -d     # builds pdp11emu:latest from this checkout
+#   open http://<host>:8080/
+#
+# The first start installs 2.11BSD from the archive baked into the image and
+# boots it to "login:" (about 16 s); log in as root (no password).
+# "docker compose down" (or stop) shuts 2.11BSD down cleanly first (about
+# 16 s); "docker compose down -v" also deletes the disks. Upgrade with
+# "git pull && docker compose up -d --build": the disks stay in the volume.
+name: pdp11emu
+
+services:
+  pdp11:
+    build: .
+    image: pdp11emu:latest
+    # Always built from this checkout, never pulled: every "up" rebuilds
+    # (from the build cache) and recreates the container if the image changed.
+    pull_policy: build
+    init: true
+    restart: unless-stopped
+    # pdp11d runs the guest's shutdown script on SIGTERM
+    # (PDP11_SHUTDOWN_ON_STOP=1 in the image): give it time, or the next boot
+    # repairs the file systems (2.11BSD: fsck, about 30 s).
+    stop_grace_period: 90s
+    ports:
+      # PDP11_HTTP_PORT: a port or address:port, e.g. 127.0.0.1:8080. A
+      # published port bypasses the host's ufw/firewalld rules.
+      - "${PDP11_HTTP_PORT:-8080}:8080"
+      # Extra terminal lines of 2.11BSD and RSX over telnet (UNAUTHENTICATED:
+      # 2.11BSD's root has no password). Uncomment together with
+      # PDP11_TTY_TELNET below, then "telnet <host> 4000".
+      # - "${PDP11_TTY_PORT:-4000}:4000"
+    environment:
+      # Password for the UI, API and WebSocket (HTTP Basic auth, any user
+      # name), from .env (single-quote it there if it contains $). Empty: no
+      # authentication, and the UI shows a banner "No password set: anyone on
+      # your network can control this machine".
+      PDP11_PASSWORD: ${PDP11_PASSWORD:-}
+      # Without a password: host names, besides IP addresses and localhost,
+      # under which the UI may be opened (a container does not know the
+      # host's names, e.g. nas.lan).
+      PDP11_HOSTS: ${PDP11_HOSTS:-}
+      # Reverse proxies whose X-Forwarded-For is trusted (addresses, CIDRs).
+      PDP11_TRUSTED_PROXIES: ${PDP11_TRUSTED_PROXIES:-}
+      # Pages that may show the UI in a frame (CSP frame-ancestors; empty:
+      # pdp11d's default 'self').
+      PDP11_FRAME_ANCESTORS: ${PDP11_FRAME_ANCESTORS:-}
+      # Time zone of the boot dialogues: RT-11, RSX, RSTS and UNIX V7 get the
+      # date and time typed in at boot.
+      TZ: ${TZ:-Etc/UTC}
+      # Hobbyist systems (rt11, rsx11mp, rsts) whose licence you accept, for
+      # installs without the UI's licence dialog (comma list).
+      # PDP11_ACCEPT_LICENSES: rt11
+      # PDP11_TTY_TELNET: ":4000"
+    volumes:
+      - pdp11-data:/data
+
+volumes:
+  pdp11-data:

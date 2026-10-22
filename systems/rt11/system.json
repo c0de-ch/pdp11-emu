@@ -1,0 +1,85 @@
+{
+  "id": "rt11",
+  "name": "RT-11 V5.3",
+  "short": "RT-11",
+  "category": "dec",
+  "order": 50,
+  "description": "DEC's RT-11 V5.3 (1985), the small, fast single-user operating system that put PDP-11s into laboratories: a keyboard monitor with a \".\" prompt, the KED editor, MACRO-11, LINK and a full set of utilities. The SimH software kit's distribution disk on an RL02; its first boot answers the installation questions automatically and reboots as RT-11FB.",
+  "license": {
+    "name": "Mentec PDP-11 hobbyist licence",
+    "class": "hobbyist",
+    "file": "LICENSE.txt",
+    "summary": "Personal, non-commercial use only, on a PDP-11 emulator (Mentec's licence for RT-11 V5.3, RSTS/E V9.6, RSX-11M V4.3, RSX-11M-PLUS V3.0 and earlier). It does not allow redistribution, so the disk image is downloaded from its original source after you accept the licence."
+  },
+  "noLogin": true,
+  "shutdown": "RT-11 needs no shutdown: it writes directories immediately. Make sure no program is running (the \".\" prompt is showing; Ctrl+C twice stops a program) and switch off.",
+  "notes": "## Log in\n\nNo login: RT-11 is a single-user system. Type commands at the `.` prompt of the keyboard monitor; `HELP` explains them (`HELP DIRECTORY`; press Return for the next page, Ctrl+C to stop). The boot sets the date and time; RT-11 V5.3 only accepts 1972-1999, so the year is the 19xx year whose calendar matches today's. Lower case input is converted to upper case.\n\n## Things to try\n\n* `SHOW CONFIGURATION`, `SHOW DEVICES`, `DIRECTORY`, `TYPE V5NOTE.TXT`, `DATE`, `TIME`.\n* Write, assemble, link and run a MACRO-11 program: `COPY TT: HELLO.MAC`, type the program, press Ctrl+Z, then `MACRO HELLO`, `LINK HELLO` and `RUN HELLO`:\n\n  ```\n          .TITLE  HELLO\n          .MCALL  .PRINT,.EXIT\n  START:  .PRINT  #MSG\n          .EXIT\n  MSG:    .ASCIZ  /Hello from MACRO-11!/\n          .END    START\n  ```\n* A light chaser for the front panel: create LIGHTS.MAC the same way, `MACRO LIGHTS`, `LINK LIGHTS`, `RUN LIGHTS`, and turn the DATA knob to DISPLAY REGISTER. Ctrl+C twice stops it.\n\n  ```\n          .TITLE  LIGHTS\n  START:  MOV     #1,R0\n  LOOP:   MOV     R0,@#177570\n          CLR     R1\n  1$:     SOB     R1,1$\n          ASL     R0\n          BNE     LOOP\n          BR      START\n          .END    START\n  ```\n* RT-11 never executes a WAIT instruction: its idle loop spins, so the RUN lamp stays lit and the ADDRESS lamps show the loop. That is why this system runs at authentic speed (about 1 MIPS) by default; at fast speed it keeps a host core 100 % busy.\n\n## Shut down\n\nNothing to shut down: RT-11 writes directories immediately. Go back to the `.` prompt (Ctrl+C twice stops a running program) and switch off.\n",
+  "cpu": {
+    "memory": "4M"
+  },
+  "speed": "authentic",
+  "boot": "boot rl0",
+  "readyPattern": ".TIME ",
+  "bootTimeoutSec": 60,
+  "console": {
+    "backspace": "del",
+    "interrupt": "ctrl-c",
+    "keyHelp": "Backspace (DEL) erases · Ctrl+U deletes the line · Ctrl+C twice stops a program · Ctrl+O suppresses output · Ctrl+Z ends terminal input"
+  },
+  "artifacts": [
+    {
+      "url": "https://simh.trailing-edge.com/kits/rtv53swre.tar.Z",
+      "mirrors": [
+        "https://web.archive.org/web/20260112010549id_/http://simh.trailing-edge.com/kits/rtv53swre.tar.Z"
+      ],
+      "sha256": "9fdad10969f1f391b13d9d97aa8fc1aa8fcb44472dac363d23eb2d31500207bc",
+      "size": 1373083,
+      "format": "tarZ",
+      "files": [
+        {
+          "path": "Disks/rtv53_rl.dsk",
+          "role": "DISK0",
+          "sha256": "ac4770cbdaf809cb3099241086947b56a5e93b2c9ae1c4908b5c30d2f2479e69",
+          "size": 10475520
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "session": [
+      {
+        "expect": "\r\n.",
+        "send": "COPY TT: HELLO.MAC\r"
+      },
+      {
+        "expect": "Files copied:",
+        "send": "        .TITLE  HELLO\r        .MCALL  .PRINT,.EXIT\rSTART:  .PRINT  #MSG\r        .EXIT\rMSG:    .ASCIZ  /Hello from MACRO-11!/\r        .END    START\r\u001a"
+      },
+      {
+        "expect": "\r\n.",
+        "send": "MACRO HELLO\r"
+      },
+      {
+        "expect": "\r\n.",
+        "send": "LINK HELLO\r"
+      },
+      {
+        "expect": "\r\n.",
+        "send": "RUN HELLO\r"
+      },
+      {
+        "expect": "HELLO FROM MACRO-11!"
+      },
+      {
+        "expect": "\r\n.",
+        "send": "SHOW CONFIGURATION\r"
+      },
+      {
+        "expect": "PDP 11/70 Processor"
+      },
+      {
+        "expect": "\r\n."
+      }
+    ]
+  }
+}

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="pdp11-version" content="{{VERSION}}">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0d0e10">
+<title>PDP-11/70</title>
+<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/vendor/xterm/xterm.css">
+<link rel="stylesheet" href="assets/css/app.css">
+<link rel="stylesheet" href="assets/css/panel.css">
+<link rel="stylesheet" href="assets/css/console.css">
+<script type="module" src="assets/js/main.js"></script>
+</head>
+<body>
+<div id="app" class="app" data-view="main">
+  <header id="toolbar" class="toolbar" aria-label="Machine controls"></header>
+  <div id="banners" class="banners"></div>
+  <main id="stage" class="stage">
+    <section id="panel-area" class="area panel-area" aria-label="Front panel">
+      <div id="panel-host" class="panel-host"></div>
+      <div id="panel-away" class="away" hidden>
+        <p>The front panel is in another window.</p>
+        <button type="button" class="btn" data-bring-back="panel">Bring back</button>
+      </div>
+      <div id="readouts" class="readouts" hidden></div>
+      <p id="landscape-hint" class="landscape-hint" hidden>Turn your device to landscape for a larger panel.</p>
+    </section>
+    <section id="console-area" class="area console-area" aria-label="Console terminal">
+      <div id="console-head" class="console-head"></div>
+      <div id="console-host" class="console-host"></div>
+      <div id="console-away" class="away" hidden>
+        <p>The console is in another window.</p>
+        <button type="button" class="btn" data-bring-back="console">Bring back</button>
+      </div>
+    </section>
+  </main>
+  <div id="toasts" class="toasts"></div>
+</div>
+<noscript><p class="noscript">The PDP-11/70 console needs JavaScript.</p></noscript>
+</body>
+</html>

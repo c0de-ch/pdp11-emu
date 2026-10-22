@@ -1,0 +1,52 @@
+# pdp11d.service: the PDP-11/70 appliance (pdp11d and the patched Open SIMH).
+#
+# install.sh copies this file to /etc/systemd/system/pdp11d.service.
+# Settings: /etc/pdp11/pdp11d.env (it overrides the Environment= lines below);
+# after a change: systemctl restart pdp11d. Logs: journalctl -u pdp11d.
+#
+# No mount-namespace sandboxing on purpose: ProtectSystem=, ProtectHome=,
+# PrivateTmp=, PrivateDevices=, ReadWritePaths= and friends make systemd set
+# up a private mount namespace for the service, which an unprivileged LXC
+# container (Proxmox CTs, for example) usually cannot do; the service then
+# fails to start with status 226/NAMESPACE. NoNewPrivileges= needs no
+# namespace and works everywhere.
+
+[Unit]
+Description=PDP-11/70 emulator appliance (pdp11d)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=pdp11
+Group=pdp11
+# Data directory (disks, panel state) and the panel export file; the runtime
+# directory /run/pdp11 is created for every start and removed at the stop.
+Environment=PDP11_DATA=/var/lib/pdp11
+Environment=PDP11_SHM=/run/pdp11/panel
+# On "systemctl stop" (and at host shutdown) type the guest OS's shutdown
+# script first, so that its file systems are clean at the next boot.
+Environment=PDP11_SHUTDOWN_ON_STOP=1
+EnvironmentFile=-/etc/pdp11/pdp11d.env
+ExecStart=/opt/pdp11/bin/pdp11d serve
+StateDirectory=pdp11
+StateDirectoryMode=0750
+RuntimeDirectory=pdp11
+RuntimeDirectoryMode=0750
+WorkingDirectory=/var/lib/pdp11
+UMask=0027
+NoNewPrivileges=yes
+# The one capability: a listener on a port below 1024 (PDP11_LISTEN=:80,
+# a PDP11_TTY_TELNET of :23), for pdp11d and the simulator it starts.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# pdp11d stops in at most about 75 s: the clean OS shutdown gets 45 s
+# (2.11BSD needs 12-16 s, RSX and RSTS 10-12 s), the power off 20 s. Only
+# pdp11d gets SIGTERM; it stops the simulator itself.
+TimeoutStopSec=90
+KillMode=mixed
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

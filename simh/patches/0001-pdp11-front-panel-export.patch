@@ -1,0 +1,394 @@
+From: pdp11-emu authors
+Subject: [PATCH 1/3] PDP11: front panel export hooks (PANEL device)
+
+Hooks for the PANEL device.  Its sources, pdp11_panel.c, pdp11_panel.h and
+pdp11_panel_shm.h (the shared memory layout), are copied into PDP11/ by
+simh/build.sh; see docs/SIMH_PATCH.md of the pdp11-emu project.
+
+* pdp11_cpu.c
+  - sim_instr: a local countdown, decremented once per instruction between
+    the WAIT check and "inst_pc = PC", calls panel_sample () when it expires
+    and stops before the fetch when the bridge requested a halt; then
+    "panel_bus = 0" marks that the new instruction made no data cycle yet
+    (a sample rebuilds the fetch from inst_pc, so ReadE needs no hook);
+    panel_rearm () sets the countdown at entry and after every abort (the
+    local does not survive the longjmp);
+  - WAIT sampler: its own countdown, checked before sim_idle (a halt
+    request then skips idling), and a sample after sim_idle slept;
+  - sim_instr entry/exit: run state, register block, stop count;
+  - the trap dispatch counts red stack, odd address, NXM and MMU traps
+    (ADRS ERR);
+  - bus capture, plain stores only: the virtual data entry points (ReadW,
+    ReadB, ReadCW, ReadMW, ReadMB, WriteW, WriteB, WriteCW) record the
+    virtual address with the D space bit, PReadW, PReadB, PWriteW and
+    PWriteB record physical address, cycle flags and data in one 64-bit
+    word, on the memory and the I/O page paths.
+* pdp11_fp.c: the virtual address of the last word of the multi-word FP11
+  stores (WriteI, WriteFP), which go through PWriteW.
+* pdp11_cpumod.c: SR_rd reads the live switch register from the export.
+* pdp11_defs.h, pdp11_sys.c: stop code STOP_PANEL "Front panel HALT" (a VM
+  stop code, so SCP does not sleep 250 ms as after SCPE_STOP), PANEL device.
+* makefile, PDP11/CMakeLists.txt: pdp11_panel.c in pdp11 and uc15.
+
+Without an attached file every hook is a no-op apart from the stores.
+
+The changed files are part of Open SIMH and carry its X11-style licence
+(Copyright (c) Robert M Supnik and the Open SIMH contributors); this patch
+is offered under the same terms.
+---
+diff --git a/PDP11/CMakeLists.txt b/PDP11/CMakeLists.txt
+index 475ec48..39705d9 100644
+--- a/PDP11/CMakeLists.txt
++++ b/PDP11/CMakeLists.txt
+@@ -66,6 +66,7 @@ add_simulator(pdp11
+         pdp11_tv.c
+         pdp11_mb.c
+         pdp11_rr.c
++        pdp11_panel.c
+         ${DISPLAYNG}
+         ${DISPLAYVT}
+     INCLUDES
+@@ -95,6 +96,7 @@ add_simulator(uc15
+         ${UC15D}/pdp11_stddev.c
+         ${UC15D}/pdp11_sys.c
+         ${UC15D}/pdp11_uc15.c
++        ${UC15D}/pdp11_panel.c
+     INCLUDES
+         ${UC15D}
+         ${PDP18BD}
+diff --git a/PDP11/pdp11_cpu.c b/PDP11/pdp11_cpu.c
+index 85f08c3..c2606d9 100644
+--- a/PDP11/pdp11_cpu.c
++++ b/PDP11/pdp11_cpu.c
+@@ -244,6 +244,7 @@
+ 
+ #include "pdp11_defs.h"
+ #include "pdp11_cpumod.h"
++#include "pdp11_panel.h"
+ 
+ #define PCQ_SIZE        64                              /* must be 2**n */
+ #define PCQ_MASK        (PCQ_SIZE - 1)
+@@ -728,6 +729,7 @@ t_stat sim_instr (void)
+ int abortval, i;
+ volatile int32 trapea;                                  /* used by setjmp */
+ InstHistory *hst_ent = NULL;
++int32 panel_cd;                                         /* PANEL: countdown */
+ 
+ sim_vm_pc_value = &pdp11_pc_value;
+ 
+@@ -761,6 +763,7 @@ MMR0 = MMR0 & ~MMR0_IC;                                 /* usually off */
+ trap_req = calc_ints (ipl, trap_req);                   /* upd int req */
+ trapea = 0;
+ reason = 0;
++panel_enter ();                                         /* PANEL: running */
+ 
+ /* Abort handling
+ 
+@@ -834,6 +837,7 @@ else {
+    for stop condition.  If interrupt, locate the vector.
+ */ 
+ 
++panel_cd = panel_rearm ();                              /* PANEL: (re)arm */
+ while (reason == 0)  {
+ 
+     int32 IR, srcspec, srcreg, dstspec, dstreg;
+@@ -882,6 +886,8 @@ while (reason == 0)  {
+                 if ((t >> trapnum) & 1) {               /* trap set? */
+                     trapea = trap_vec[trapnum];         /* get vec, clr */
+                     trap_req = trap_req & ~trap_clear[trapnum];
++                    if (trapnum <= TRAP_V_MME)          /* PANEL: red stack, odd */
++                        panel_trap ();                  /* addr, NXM, MMU = ADRS ERR */
+                     if ((stop_trap >> trapnum) & 1)     /* stop on trap? */
+                         reason = trapnum + 1;
+                     break;
+@@ -953,10 +959,21 @@ while (reason == 0)  {
+     if (tbit)
+         setTRAP (TRAP_TRC);
+     if (wait_state) {                                   /* wait state? */
+-        sim_idle (TMR_CLK, TRUE);
++        if ((--panel_wcountdown <= 0) && panel_wait (FALSE))
++            continue;                                   /* PANEL: halt requested */
++        if (sim_idle (TMR_CLK, TRUE))                   /* idled? */
++            panel_wait (TRUE);                          /* PANEL: sample the sleep */
+         continue;
+         }
+ 
++    if (--panel_cd <= 0) {                              /* PANEL: sample the */
++        panel_cd = panel_sample ();                     /* last instruction */
++        if (reason != 0) {                              /* halt requested? */
++            trap_req = trap_req & ~TRAP_TRC;            /* T bit trap: after */
++            break;                                      /* the next instr */
++            }
++        }
++    panel_bus = 0;                                      /* PANEL: no cycle yet */
+     reg_mods = 0;
+     inst_pc = PC;
+     /* Save PSW also because condition codes need to be preserved.  We
+@@ -2445,6 +2462,7 @@ STACKFILE[cm] = SP;
+ saved_PC = PC & 0177777;
+ pcq_r->qptr = pcq_p;                                    /* update pc q ptr */
+ set_r_display (rs, cm);
++panel_exit (panel_cd);                                  /* PANEL: halted */
+ return reason;
+ }
+ 
+@@ -2657,6 +2675,7 @@ int32 ReadW (int32 va)
+ {
+ int32 pa;
+ 
++PANEL_VA (va);                                          /* PANEL: bus capture */
+ if ((va & 1) && CPUT (HAS_ODD)) {                       /* odd address? */
+     setCPUERR (CPUE_ODD);
+     ABORT (TRAP_ODD);
+@@ -2673,6 +2692,7 @@ int32 ReadB (int32 va)
+ {
+ int32 pa;
+ 
++PANEL_VA (va);                                          /* PANEL: bus capture */
+ pa = relocR (va);                                       /* relocate */
+ if (BPT_SUMM_RD &&
+     (sim_brk_test (va & 0177777, BPT_RDVIR) ||
+@@ -2688,6 +2708,7 @@ int32 ReadCW (int32 va)
+ {
+ int32 pa;
+ 
++PANEL_VA (va);                                          /* PANEL: bus capture */
+ if ((va & 1) && CPUT (HAS_ODD)) {                       /* odd address? */
+     setCPUERR (CPUE_ODD);
+     ABORT (TRAP_ODD);
+@@ -2702,6 +2723,7 @@ return PReadW (pa);
+ 
+ int32 ReadMW (int32 va)
+ {
++PANEL_VA (va);                                          /* PANEL: bus capture */
+ if ((va & 1) && CPUT (HAS_ODD)) {                       /* odd address? */
+     setCPUERR (CPUE_ODD);
+     ABORT (TRAP_ODD);
+@@ -2716,6 +2738,7 @@ return PReadW (last_pa);
+ 
+ int32 ReadMB (int32 va)
+ {
++PANEL_VA (va);                                          /* PANEL: bus capture */
+ last_pa = relocW (va);                                  /* reloc, wrt chk */
+ if (BPT_SUMM_RW &&
+     (sim_brk_test (va & 0177777, BPT_RWVIR) ||
+@@ -2728,8 +2751,11 @@ int32 PReadW (int32 pa)
+ {
+ int32 data;
+ 
+-if (ADDR_IS_MEM (pa))                                   /* memory address? */
+-    return RdMemW (pa);
++if (ADDR_IS_MEM (pa)) {                                 /* memory address? */
++    data = RdMemW (pa);
++    PANEL_BUS (pa, data, 0);                            /* PANEL: bus capture */
++    return data;
++    }
+ if (pa < IOPAGEBASE) {                                  /* not I/O address? */
+     setCPUERR (CPUE_NXM);
+     ABORT (TRAP_NXM);
+@@ -2738,6 +2764,7 @@ if (iopageR (&data, pa, READ) != SCPE_OK) {             /* invalid I/O addr? */
+     setCPUERR (CPUE_TMO);
+     ABORT (TRAP_NXM);
+     }
++PANEL_BUS (pa, data, PNL_IOPAGE);                       /* PANEL: bus capture */
+ return data;
+ }
+ 
+@@ -2745,8 +2772,11 @@ int32 PReadB (int32 pa)
+ {
+ int32 data;
+ 
+-if (ADDR_IS_MEM (pa))                                   /* memory address? */
+-    return RdMemB (pa);
++if (ADDR_IS_MEM (pa)) {                                 /* memory address? */
++    data = RdMemB (pa);
++    PANEL_BUS (pa, data, PNL_BYTE);                     /* PANEL: bus capture */
++    return data;
++    }
+ if (pa < IOPAGEBASE) {                                  /* not I/O address? */
+     setCPUERR (CPUE_NXM);
+     ABORT (TRAP_NXM);
+@@ -2755,7 +2785,9 @@ if (iopageR (&data, pa, READ) != SCPE_OK) {             /* invalid I/O addr? */
+     setCPUERR (CPUE_TMO);
+     ABORT (TRAP_NXM);
+     }
+-return ((pa & 1)? data >> 8: data) & 0377;
++data = ((pa & 1)? data >> 8: data) & 0377;
++PANEL_BUS (pa, data, PNL_BYTE | PNL_IOPAGE);            /* PANEL: bus capture */
++return data;
+ }
+ 
+ /* Write byte and word routines
+@@ -2771,6 +2803,7 @@ void WriteW (int32 data, int32 va)
+ {
+ int32 pa;
+ 
++PANEL_VA (va);                                          /* PANEL: bus capture */
+ if ((va & 1) && CPUT (HAS_ODD)) {                       /* odd address? */
+     setCPUERR (CPUE_ODD);
+     ABORT (TRAP_ODD);
+@@ -2787,6 +2820,7 @@ void WriteB (int32 data, int32 va)
+ {
+ int32 pa;
+ 
++PANEL_VA (va);                                          /* PANEL: bus capture */
+ pa = relocW (va);                                       /* relocate */
+ if (BPT_SUMM_WR &&
+     (sim_brk_test (va & 0177777, BPT_WRVIR) ||
+@@ -2802,6 +2836,7 @@ void WriteCW (int32 data, int32 va)
+ {
+ int32 pa;
+ 
++PANEL_VA (va);                                          /* PANEL: bus capture */
+ if ((va & 1) && CPUT (HAS_ODD)) {                       /* odd address? */
+     setCPUERR (CPUE_ODD);
+     ABORT (TRAP_ODD);
+@@ -2818,6 +2853,7 @@ void PWriteW (int32 data, int32 pa)
+ {
+ if (ADDR_IS_MEM (pa)) {                                 /* memory address? */
+     WrMemW (pa, data);
++    PANEL_BUS (pa, data, PNL_WR);                       /* PANEL: bus capture */
+     return;
+     }
+ if (pa < IOPAGEBASE) {                                  /* not I/O address? */
+@@ -2828,6 +2864,7 @@ if (iopageW (data, pa, WRITE) != SCPE_OK) {             /* invalid I/O addr? */
+     setCPUERR (CPUE_TMO);
+     ABORT (TRAP_NXM);
+     }
++PANEL_BUS (pa, data, PNL_WR | PNL_IOPAGE);              /* PANEL: bus capture */
+ return;
+ }
+ 
+@@ -2835,6 +2872,7 @@ void PWriteB (int32 data, int32 pa)
+ {
+ if (ADDR_IS_MEM (pa)) {                                 /* memory address? */
+     WrMemB (pa, data);
++    PANEL_BUS (pa, data & 0377, PNL_WR | PNL_BYTE);     /* PANEL: bus capture */
+     return;
+     }             
+ if (pa < IOPAGEBASE) {                                  /* not I/O address? */
+@@ -2845,6 +2883,7 @@ if (iopageW (data, pa, WRITEB) != SCPE_OK) {            /* invalid I/O addr? */
+     setCPUERR (CPUE_TMO);
+     ABORT (TRAP_NXM);
+     }
++PANEL_BUS (pa, data & 0377, PNL_WR | PNL_BYTE | PNL_IOPAGE); /* PANEL: bus capture */
+ return;
+ }
+ 
+diff --git a/PDP11/pdp11_cpumod.c b/PDP11/pdp11_cpumod.c
+index d50063b..bea1f5d 100644
+--- a/PDP11/pdp11_cpumod.c
++++ b/PDP11/pdp11_cpumod.c
+@@ -49,6 +49,7 @@
+ 
+ #include "pdp11_defs.h"
+ #include "pdp11_cpumod.h"
++#include "pdp11_panel.h"
+ 
+ /* Byte write macros for system registers
+ 
+@@ -360,6 +361,7 @@ DEVICE sys_dev = {
+ 
+ t_stat SR_rd (int32 *data, int32 pa, int32 access)
+ {
++SR = panel_sr (SR);                                     /* PANEL: live switches */
+ *data = SR;
+ return SCPE_OK;
+ }
+diff --git a/PDP11/pdp11_defs.h b/PDP11/pdp11_defs.h
+index 361cc16..f92614e 100644
+--- a/PDP11/pdp11_defs.h
++++ b/PDP11/pdp11_defs.h
+@@ -480,6 +480,7 @@ typedef struct {
+ #define STOP_RQ         (TRAP_V_MAX + 6)                /* RQDX3 panic */
+ #define STOP_SANITY     (TRAP_V_MAX + 7)                /* sanity timer exp */
+ #define STOP_DTOFF      (TRAP_V_MAX + 8)                /* DECtape off reel */
++#define STOP_PANEL      (TRAP_V_MAX + 9)                /* front panel halt request */
+ #define IORETURN(f,v)   ((f)? (v): SCPE_OK)             /* cond error return */
+ 
+ /* Timers */
+diff --git a/PDP11/pdp11_fp.c b/PDP11/pdp11_fp.c
+index 3c440d1..9e5d01e 100644
+--- a/PDP11/pdp11_fp.c
++++ b/PDP11/pdp11_fp.c
+@@ -103,6 +103,7 @@
+ */
+ 
+ #include "pdp11_defs.h"
++#include "pdp11_panel.h"
+ 
+ /* Floating point status register */
+ 
+@@ -835,6 +836,7 @@ if (BPT_SUMM_WR &&
+      sim_brk_test (pa2, BPT_WRPHY)))                    /* write breakpoint? */
+     ABORT (ABRT_BKPT);                                  /* stop simulation */
+ PWriteW ((data >> 16) & 0177777, pa);
++PANEL_VA ((VA & ~0177777) | ((VA + 2) & 0177777));      /* PANEL: bus capture */
+ PWriteW (data & 0177777, pa2);
+ return;
+ }
+@@ -895,10 +897,12 @@ else {
+     }
+ 
+ PWriteW ((fptr->h >> FP_V_F0) & 0177777, pa);
++PANEL_VA (exta | ((VA + 2) & 0177777));                 /* PANEL: bus capture */
+ PWriteW ((fptr->h >> FP_V_F1) & 0177777, pa2);
+ if (len == LONG)
+     return;
+ PWriteW ((fptr->l >> FP_V_F2) & 0177777, pa3);
++PANEL_VA (exta | ((VA + 6) & 0177777));                 /* PANEL: bus capture */
+ PWriteW ((fptr->l >> FP_V_F3) & 0177777, pa4);
+ return;
+ }
+diff --git a/PDP11/pdp11_sys.c b/PDP11/pdp11_sys.c
+index b25e26d..18df0b5 100644
+--- a/PDP11/pdp11_sys.c
++++ b/PDP11/pdp11_sys.c
+@@ -129,6 +129,7 @@ extern DEVICE daz_dev;
+ extern DEVICE tv_dev;
+ #endif
+ extern DEVICE mb_dev;
++extern DEVICE panel_dev;
+ extern REG cpu_reg[];
+ extern int32 saved_PC;
+ 
+@@ -226,6 +227,7 @@ DEVICE *sim_devices[] = {
+     &uca_dev,
+     &ucb_dev,
+ #endif
++    &panel_dev,
+     NULL
+     };
+ 
+@@ -253,7 +255,8 @@ const char *sim_stop_messages[SCPE_BASE] = {
+     "Trap stack push abort",
+     "RQDX3 consistency error",
+     "Sanity timer expired",
+-    "DECtape off reel"
++    "DECtape off reel",
++    "Front panel HALT"
+     };
+ 
+ /* Binary loader.
+diff --git a/makefile b/makefile
+index b460a38..76efada 100644
+--- a/makefile
++++ b/makefile
+@@ -1531,7 +1531,7 @@ PDP11 = ${PDP11D}/pdp11_fp.c ${PDP11D}/pdp11_cpu.c ${PDP11D}/pdp11_dz.c \
+ 	${PDP11D}/pdp11_vt.c ${PDP11D}/pdp11_td.c ${PDP11D}/pdp11_io_lib.c \
+ 	${PDP11D}/pdp11_rom.c ${PDP11D}/pdp11_ch.c ${PDP11D}/pdp11_dh.c \
+ 	${PDP11D}/pdp11_ng.c ${PDP11D}/pdp11_daz.c ${PDP11D}/pdp11_tv.c \
+-	${PDP11D}/pdp11_mb.c ${PDP11D}/pdp11_rr.c \
++	${PDP11D}/pdp11_mb.c ${PDP11D}/pdp11_rr.c ${PDP11D}/pdp11_panel.c \
+ 	${DISPLAYL} ${DISPLAYNG} ${DISPLAYVT}
+ PDP11_OPT = -DVM_PDP11 -I ${PDP11D} ${NETWORK_OPT} ${DISPLAY_OPT} ${AIO_CCDEFS}
+ 
+@@ -1543,7 +1543,7 @@ UC15 = ${UC15D}/pdp11_cis.c ${UC15D}/pdp11_cpu.c \
+ 	${UC15D}/pdp11_io_lib.c ${UC15D}/pdp11_lp.c \
+ 	${UC15D}/pdp11_rh.c ${UC15D}/pdp11_rk.c \
+ 	${UC15D}/pdp11_stddev.c ${UC15D}/pdp11_sys.c \
+-	${UC15D}/pdp11_uc15.c
++	${UC15D}/pdp11_uc15.c ${UC15D}/pdp11_panel.c
+ UC15_OPT = -DVM_PDP11 -DUC15 -I ${UC15D} -I ${PDP18BD}
+ 
+ 

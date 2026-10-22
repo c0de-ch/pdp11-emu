@@ -1,0 +1,15 @@
+{
+  "name": "pdp11-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Browser end-to-end tests against the real stack: pdp11d + patched SimH + web UI in headless Chromium",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --test-timeout=1200000 real-stack.test.mjs"
+  },
+  "optionalDependencies": {
+    "playwright-core": "1.56.1"
+  }
+}

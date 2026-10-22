@@ -1,0 +1,15 @@
+# build outputs
+/simh/out/
+/simh/src/
+/bin/
+/dist/
+# web dev tooling
+/web/dev/node_modules/
+/tests/**/node_modules/
+/tests/**/out/
+# local data and secrets (.env holds PDP11_PASSWORD)
+/data/
+/.env
+*.dsk
+*.tap
+__pycache__/

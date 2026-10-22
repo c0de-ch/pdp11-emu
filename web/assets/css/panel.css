@@ -1,0 +1,138 @@
+/* Front panel: SVG art, 64 HTML lamp layers and the interaction layer.
+   The panel keeps its physical colours in every theme (UI.md §1). */
+
+@font-face {
+  font-family: "Archivo Panel";
+  src: url("../fonts/archivo-panel.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Archivo Panel";
+  src: url("../fonts/archivo-panel-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;
+}
+
+.panel-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 484.4 / 260.4;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  contain: layout paint;
+}
+
+.panel-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+}
+
+.panel-svg text {
+  font-family: "Archivo Panel", "Arial Narrow", "Liberation Sans Narrow", Arial, sans-serif;
+  font-weight: 600;
+  font-kerning: normal;
+  /* subpixel glyph positions: textLength-fitted labels stay even at small sizes */
+  text-rendering: geometricPrecision;
+}
+
+.lamp-layer,
+.hit-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.lamp-layer {
+  pointer-events: none;
+}
+
+/* Lit LED (UI.md §3): disc Ø 5.2 mm, radial gradient #ff3b2a -> #e8001a (60 %)
+   -> #8a0010 (rim), specular dot Ø 1 mm at (-1.2, -1.2) mm with 40 % white,
+   halo at most 1.5 mm beyond the disc with alpha <= 0.3. The element is
+   8.2 mm square, so the disc rim is at 63.4 % of closest-side. */
+.lamp {
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0;
+  will-change: opacity;
+  pointer-events: none;
+  background:
+    radial-gradient(6.1% 6.1% at 35.37% 35.37%, rgb(255 255 255 / 0.4) 0%, rgb(255 255 255 / 0.4) 55%, rgb(255 255 255 / 0) 100%),
+    radial-gradient(closest-side, #ff3b2a 0%, #e8001a 38%, #8a0010 62.6%,
+      rgb(255 34 20 / 0.26) 63.6%, rgb(255 34 20 / 0.08) 80%, rgb(255 34 20 / 0) 100%);
+}
+
+/* Paddles: three poses cross-faded in 60-90 ms */
+.paddle .pose {
+  opacity: 0;
+  transition: opacity 70ms ease-out;
+}
+
+.paddle[data-pose="rest"] > .pose-rest,
+.paddle[data-pose="back"] > .pose-back,
+.paddle[data-pose="fwd"] > .pose-fwd {
+  opacity: 1;
+}
+
+.paddle-hl {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 80ms ease-out;
+}
+
+.paddle.hover .paddle-hl {
+  opacity: 0.08;
+}
+
+.paddle.focus .paddle-hl {
+  opacity: 0.12;
+}
+
+.knob-rot {
+  transition: transform 100ms ease-out;
+}
+
+.key-rot {
+  transition: transform 110ms ease-out;
+}
+
+.no-branding .branding,
+.no-branding .logo {
+  display: none;
+}
+
+/* Interaction layer: transparent targets carrying roles and focus rings */
+.hit {
+  position: absolute;
+  touch-action: none;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: 0.35vmin;
+}
+
+.hit-knob,
+.hit-key {
+  border-radius: 50%;
+}
+
+.hit:focus-visible {
+  box-shadow: 0 0 0 2px #0b0d10, 0 0 0 4px var(--focus, #66b3ff);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .paddle .pose,
+  .knob-rot,
+  .key-rot,
+  .paddle-hl {
+    transition-duration: 0ms;
+  }
+}

@@ -1,0 +1,149 @@
+#!/bin/sh
+# pdp11d-run: start pdp11d without systemd, e.g. in a container that has no
+# init system (install.sh --no-systemd installs it as /opt/pdp11/bin/pdp11d-run).
+#
+#   pdp11d-run [serve flags...]
+#
+# It sets up what pdp11d.service sets up: the same defaults (PDP11_DATA,
+# PDP11_SHM in /run/pdp11, PDP11_SHUTDOWN_ON_STOP=1), the settings from
+# /etc/pdp11/pdp11d.env ($PDP11_ENV_FILE) read the way systemd reads it, the
+# umask, and run as root it creates /run/pdp11 and drops to the user pdp11,
+# keeping CAP_NET_BIND_SERVICE (ports below 1024) like the unit. pdp11d
+# replaces this script (exec), so signals reach it directly: stop it with
+# SIGTERM and allow up to 90 s for the clean shutdown of the guest OS.
+set -eu
+
+env_file=${PDP11_ENV_FILE:-/etc/pdp11/pdp11d.env}
+user=pdp11
+bin=/opt/pdp11/bin/pdp11d
+
+export PDP11_DATA=/var/lib/pdp11
+export PDP11_SHM=/run/pdp11/panel
+export PDP11_SHUTDOWN_ON_STOP=1
+
+warn() { printf 'pdp11d-run: warning: %s\n' "$*" >&2; }
+
+# read_env FILE: the KEY=value assignments of FILE under the rules of
+# systemd's EnvironmentFile= (systemd.exec(5), its env-file.c parser): "#"
+# and ";" start comment lines; an unquoted value loses its trailing blanks,
+# keeps inner ones and takes backslash escapes; '...' is literal; "..."
+# takes \" \\ \` \$ (other backslashes stay); quoted values may span lines,
+# and a backslash at the end of a line continues an unquoted one. Printed as
+# export statements with every value single-quoted, so evaluating them runs
+# nothing but the assignments; invalid names are skipped, as systemd does.
+read_env() {
+	LC_ALL=C awk -v q="'" '
+	function ws(c) { return c == " " || c == "\t" || nl(c) }
+	function nl(c) { return c == "\n" || c == "\r" }
+	function emit(k, v) {
+		k = key
+		sub(/[ \t]+$/, "", k)
+		if (k !~ /^[A-Za-z_][A-Za-z0-9_]*$/)
+			return
+		v = val
+		gsub(q, q "\"" q "\"" q, v)
+		printf "export %s=%s%s%s\n", k, q, v, q
+	}
+	{ text = text $0 "\n" }
+	END {
+		st = "prekey"
+		n = length(text)
+		for (i = 1; i <= n; i++) {
+			c = substr(text, i, 1)
+			if (st == "prekey") {
+				if (c == "#" || c == ";") st = "comment"
+				else if (!ws(c)) { st = "key"; key = c }
+			} else if (st == "key") {
+				if (nl(c)) st = "prekey"
+				else if (c == "=") { st = "prevalue"; val = ""; trail = 0 }
+				else key = key c
+			} else if (st == "prevalue") {
+				if (nl(c)) { emit(); st = "prekey" }
+				else if (c == q) st = "single"
+				else if (c == "\"") st = "double"
+				else if (c == "\\") st = "escape"
+				else if (!ws(c)) { st = "value"; val = val c }
+			} else if (st == "value") {
+				if (nl(c)) {
+					if (trail) val = substr(val, 1, trail - 1)
+					emit(); st = "prekey"
+				} else if (c == "\\") { st = "escape"; trail = 0 }
+				else {
+					if (!ws(c)) trail = 0
+					else if (!trail) trail = length(val) + 1
+					val = val c
+				}
+			} else if (st == "escape") {
+				st = "value"
+				if (!nl(c)) val = val c
+			} else if (st == "single") {
+				if (c == q) st = "prevalue"
+				else val = val c
+			} else if (st == "double") {
+				if (c == "\"") st = "prevalue"
+				else if (c == "\\") st = "descape"
+				else val = val c
+			} else if (st == "descape") {
+				st = "double"
+				if (index("\"\\`$", c)) val = val c
+				else if (c != "\n") val = val "\\" c
+			} else if (st == "comment") {
+				if (c == "\\") st = "cescape"
+				else if (nl(c)) st = "prekey"
+			} else if (st == "cescape")
+				st = nl(c) ? "prekey" : "comment"
+		}
+		if (st == "value" && trail) val = substr(val, 1, trail - 1)
+		if (st != "prekey" && st != "key" && st != "comment" && st != "cescape") emit()
+	}' "$1"
+}
+
+if [ -r "$env_file" ]; then
+	settings=$(read_env "$env_file")
+	eval "$settings"
+fi
+
+# low_port [serve flags...]: whether pdp11d (PDP11_LISTEN, --listen) or the
+# simulator (PDP11_TTY_TELNET, --tty-telnet) listens on a port that needs
+# CAP_NET_BIND_SERVICE (below net.ipv4.ip_unprivileged_port_start).
+low_port() {
+	limit=$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || echo 1024)
+	addrs="${PDP11_LISTEN:-:8080} ${PDP11_TTY_TELNET:-}"
+	prev=
+	for a in "$@"; do
+		case $prev in -listen | --listen | -tty-telnet | --tty-telnet) addrs="$addrs $a" ;; esac
+		case $a in -listen=* | --listen=* | -tty-telnet=* | --tty-telnet=*) addrs="$addrs ${a#*=}" ;; esac
+		prev=$a
+	done
+	for a in $addrs; do
+		p=${a##*:}
+		case $p in '' | *[!0-9]*) continue ;; esac
+		[ "$p" -ge "$limit" ] || return 0
+	done
+	return 1
+}
+
+umask 027
+if [ "$(id -u)" != 0 ]; then
+	exec "$bin" serve "$@"
+fi
+
+case $PDP11_SHM in
+/run/pdp11/*) install -d -o "$user" -g "$user" -m 0750 /run/pdp11 ;;
+esac
+[ -d "$PDP11_DATA" ] || install -d -o "$user" -g "$user" -m 0750 "$PDP11_DATA"
+export HOME="$PDP11_DATA" USER="$user" LOGNAME="$user"
+nocaps="cannot keep CAP_NET_BIND_SERVICE for the user $user, so a port below 1024 cannot be bound"
+if command -v setpriv >/dev/null 2>&1; then
+	# Ambient, like the unit's AmbientCapabilities=: pdp11d and the
+	# simulator it starts keep it after the change of user.
+	caps="--inh-caps=+net_bind_service --ambient-caps=+net_bind_service"
+	# shellcheck disable=SC2086
+	if setpriv --reuid="$user" --regid="$user" --init-groups $caps -- true 2>/dev/null; then
+		exec setpriv --reuid="$user" --regid="$user" --init-groups $caps -- "$bin" serve "$@"
+	fi
+	if low_port "$@"; then warn "$nocaps (setpriv refused the capability)"; fi
+	exec setpriv --reuid="$user" --regid="$user" --init-groups -- "$bin" serve "$@"
+fi
+if low_port "$@"; then warn "$nocaps (no setpriv)"; fi
+exec runuser -u "$user" -- "$bin" serve "$@"

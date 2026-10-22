@@ -1,0 +1,27 @@
+# Build context of the Dockerfile: the sources, without build outputs, local
+# data and development tooling.
+
+# version control and editor files
+**/.git
+**/.gitignore
+**/*.swp
+**/*~
+
+# build outputs (simh/build.sh, Makefile)
+simh/src
+simh/out
+bin
+dist
+
+# local data and secrets
+data
+.env
+**/*.dsk
+**/*.tap
+
+# development tooling and research material, not needed to build the image
+web/dev/node_modules
+docs/research
+tests/**/node_modules
+tests/**/out
+**/__pycache__

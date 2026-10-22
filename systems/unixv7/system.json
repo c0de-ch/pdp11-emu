@@ -1,0 +1,106 @@
+{
+  "id": "unixv7",
+  "name": "UNIX Seventh Edition",
+  "short": "UNIX V7",
+  "category": "unix",
+  "order": 20,
+  "description": "Bell Labs Research UNIX, Seventh Edition (1979), the ancestor of every later UNIX: the Bourne shell, awk, make, lex and yacc, the C compiler, the kernel source and the classic games. Keith Bostic's distribution as packaged by the w11 project, on an RP04 disk with 2 MB of memory; it boots to login: in about two seconds.",
+  "license": {
+    "name": "Caldera \"Ancient UNIX\" licence (2002)",
+    "class": "redistributable",
+    "file": "LICENSE.txt",
+    "summary": "Free to use, modify and redistribute: Caldera's 2002 BSD-style licence for UNIX Versions 1-7 and 32V (keep the copyright notice and the acknowledgement)."
+  },
+  "credentials": [
+    {
+      "user": "root",
+      "password": "root"
+    }
+  ],
+  "shutdown": "V7 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you (logging in as root first if needed).",
+  "shutdownScript": [
+    {
+      "send": "root\r"
+    },
+    {
+      "expect": ":",
+      "send": "root\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# "
+    }
+  ],
+  "notes": "## Log in\n\nLog in as **root**, password **root**. The terminal settings are from 1979: **#** erases the last character and **@** kills the line (the console's Backspace key sends # for you), DEL interrupts (Ctrl+C sends DEL) and Ctrl+D ends input. Type `\\#` or `\\@` for the characters themselves (`\\#include`).\n\nThe boot sets the clock (the PDP-11/70 has no battery clock). V7 only knows 19xx years, so the year is the 19xx year whose calendar matches today's.\n\n## Things to try\n\n* `ls -l /`, `ps ax`, `who`, `cal 7 1979`, `bc`, `dc`, `units`, `awk`.\n* Compile C: `cat > hello.c`, type `main() { printf(\"hello, world\\n\"); }`, press Ctrl+D, then `cc hello.c` and `./a.out`.\n* Games in `/usr/games`: `chess`, `backgammon`, `wump` (hunt the wumpus), `ttt`, `bj`, `moo`, `quiz`, `hangman`, `cubic`, `maze`, `reversi`, `checkers`, `ching` and `fortune`.\n* The display register: on every clock tick V7 copies one word of kernel memory into the console's DISPLAY REGISTER, the word whose address is set in the switch register. Turn the DATA knob to DISPLAY REGISTER and set the switches to 004244: the DATA lamps show the kernel's tick counter `lbolt` counting through each second; 004250 shows the low word of the time, one count per second. `nm /unix` lists the other kernel variables.\n* The kernel source is in `/usr/sys`, the commands in `/usr/src/cmd`.\n\n## Shut down\n\nThere is no shutdown or halt command: type `sync` three times, wait a few seconds for the disk writes to finish and switch off.\n",
+  "cpu": {
+    "memory": "2M"
+  },
+  "speed": "fast",
+  "boot": "boot rp0",
+  "readyPattern": "login: ",
+  "bootTimeoutSec": 30,
+  "console": {
+    "backspace": "#",
+    "interrupt": "del",
+    "keyHelp": "Backspace sends # (erase) · @ kills the line · Ctrl+C sends DEL (interrupt) · Ctrl+D ends input"
+  },
+  "artifacts": [
+    {
+      "url": "https://www.retro11.de/data/oc_w11/oskits/u7ed_rpset.tgz",
+      "mirrors": [
+        "https://web.archive.org/web/20200205233613id_/http://retro11.de/data/oc_w11/oskits/u7ed_rpset.tgz"
+      ],
+      "sha256": "55fb0dad3d28eb6ccdf3af7039c6b3d77904d5114ed368e443e8b3682217a6cf",
+      "size": 4238767,
+      "format": "tgz",
+      "files": [
+        {
+          "path": "./u7ed_rp.dsk",
+          "role": "DISK0",
+          "sha256": "894d8755c9fe1f7a3626025812eeb4c2148c17cad4d111b5c5bdf08955f8f704",
+          "size": 87960576,
+          "sparse": true
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "session": [
+      {
+        "send": "root\r"
+      },
+      {
+        "expect": "Password:",
+        "send": "root\r"
+      },
+      {
+        "expect": "# ",
+        "send": "echo 'main(){printf(\"hello from %s\\n\", \"C\");}' > /tmp/hello.c && cc -o /tmp/hello /tmp/hello.c && /tmp/hello\r"
+      },
+      {
+        "expect": "hello from C"
+      },
+      {
+        "expect": "# ",
+        "send": "awk 'BEGIN { print 6*7 }' /dev/null\r"
+      },
+      {
+        "expect": "42"
+      },
+      {
+        "expect": "# "
+      }
+    ]
+  }
+}

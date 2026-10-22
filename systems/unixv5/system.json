@@ -1,0 +1,103 @@
+{
+  "id": "unixv5",
+  "name": "UNIX Fifth Edition",
+  "short": "UNIX V5",
+  "category": "unix",
+  "order": 40,
+  "description": "Bell Labs Research UNIX, Fifth Edition (1974), the first UNIX with its kernel written in C, from the year of the famous CACM paper. The SimH software kit's single RK05 pack: a complete 2.5 MB system with the C compiler, assembler, ed, BASIC and a few games.",
+  "license": {
+    "name": "Caldera \"Ancient UNIX\" licence (2002)",
+    "class": "redistributable",
+    "file": "LICENSE.txt",
+    "summary": "Free to use, modify and redistribute: Caldera's 2002 BSD-style licence for UNIX Versions 1-7 and 32V (keep the copyright notice and the acknowledgement)."
+  },
+  "credentials": [
+    {
+      "user": "root",
+      "password": "",
+      "note": "no password"
+    }
+  ],
+  "shutdown": "V5 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you (logging in as root first if needed).",
+  "shutdownScript": [
+    {
+      "send": "root\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# ",
+      "send": "sync\r"
+    },
+    {
+      "expect": "# "
+    }
+  ],
+  "notes": "## Log in\n\nLog in as **root** (no password). **#** erases the last character and **@** kills the line (the console's Backspace key sends # for you), DEL interrupts (Ctrl+C sends DEL), Ctrl+D ends input; `\\#` and `\\@` type the characters themselves. Use `chdir` instead of `cd`.\n\n## Things to try\n\n* `ls -l /bin`, `ps`, `who`, `date` - the system of 1974-75.\n* Compile C: `chdir /tmp`, `cat > hello.c`, type `main() { printf(\"hello, world\\n\"); }`, press Ctrl+D, then `cc hello.c` and `a.out`.\n* `bas` is a BASIC interpreter; games in `/usr/games`: `chess`, `bj`, `moo`, `ttt`, `cubic`, `wump`.\n* The display register: the kernel copies the word at the address in the switch register into the DISPLAY REGISTER on every clock tick. Turn the DATA knob to DISPLAY REGISTER and set the switches to 055140 to watch the tick counter `lbolt`, or 055144 for the seconds (`nm /unix`).\n\n## Shut down\n\nThere is no shutdown or halt command: type `sync` three times, wait a few seconds and switch off.\n",
+  "cpu": {
+    "memory": "1M"
+  },
+  "speed": "fast",
+  "boot": "boot rk0",
+  "readyPattern": "login: ",
+  "bootTimeoutSec": 30,
+  "console": {
+    "backspace": "#",
+    "interrupt": "del",
+    "keyHelp": "Backspace sends # (erase) · @ kills the line · Ctrl+C sends DEL (interrupt) · Ctrl+D ends input"
+  },
+  "artifacts": [
+    {
+      "url": "https://simh.trailing-edge.com/kits/uv5swre.zip",
+      "mirrors": [
+        "https://web.archive.org/web/20250803120342id_/https://simh.trailing-edge.com/kits/uv5swre.zip"
+      ],
+      "sha256": "875fe94acf3b0a54bc927c8c507cd83c1060f671ce01d38f1d0235d64f8812d1",
+      "size": 806708,
+      "format": "zip",
+      "files": [
+        {
+          "path": "unix_v5_rk.dsk",
+          "role": "DISK0",
+          "sha256": "af573c130bc4aadb2ec3d67983e6f1687bd49b994a0fe7c5101b407dd85eec16",
+          "size": 2494464
+        }
+      ]
+    }
+  ],
+  "tests": {
+    "session": [
+      {
+        "send": "root\r"
+      },
+      {
+        "expect": "# ",
+        "send": "chdir /tmp\r"
+      },
+      {
+        "expect": "# ",
+        "send": "echo 'main(){printf(\"hello from %s\\n\", \"C\");}' > h.c\r"
+      },
+      {
+        "expect": "# ",
+        "send": "cc h.c\r"
+      },
+      {
+        "expect": "# ",
+        "send": "a.out\r"
+      },
+      {
+        "expect": "hello from C"
+      },
+      {
+        "expect": "# "
+      }
+    ]
+  }
+}

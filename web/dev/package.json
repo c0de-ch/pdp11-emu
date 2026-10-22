@@ -1,0 +1,20 @@
+{
+  "name": "pdp11-web-dev",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Development tools for the pdp11d web UI: mock server, geometry generator, UI tests",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "mock": "node mock-server.mjs",
+    "geometry": "node gen-geometry.mjs",
+    "test": "node --test --test-concurrency=1 tests/"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  },
+  "optionalDependencies": {
+    "playwright-core": "1.56.1"
+  }
+}
