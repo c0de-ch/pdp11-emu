@@ -77,16 +77,29 @@ python3 -I tests/systems/bootmatrix.py --boots 2 --second-boot
   second DL11 (`cn 1`), so `boot.ini` enables one DLI line, which moves the DZ11 to vector 310.
   There is no byte-identical HTTPS mirror (jsDelivr refuses files over 20 MB, the Internet
   Archive has no copy).
-* 2.11BSD pl499 exists only on anonymous FTP (`ftp.dfupdate.se`). The file was regenerated
-  upstream on 2026-10-18; if it changes again the checksum no longer matches and the install
-  fails cleanly. Its `pidp` kernel counts 50 clock ticks per second, so `boot.ini` sets the
+* 2.11BSD pl499 exists only on anonymous FTP (`ftp.dfupdate.se`). The file is regenerated
+  upstream from time to time (2026-10-18, 2026-10-27; the pin is the latter, older files are
+  not kept anywhere); if it changes again the checksum no longer matches and the install fails
+  cleanly and the entry needs a new pin. Its image ships with `rc_configured=NO` in
+  `/etc/rc.conf`, which stops `/etc/rc` at a root shell ("Automatic multiuser boot aborted"), so
+  the first boot's `dialog.ini` rule sets `rc_configured=YES` and `sendmail=NO` there and
+  reboots; rc.conf's other daemons are already off, and there is no network device (`xu` is
+  disabled, `/etc/rc` still starts inetd, which sees only `lo0`). Its `pidp` kernel counts 50 clock ticks per second, so `boot.ini` sets the
   KW11-L to 50 Hz (at SimH's default 60 Hz the clock gained 12 s a minute;
   `tests/systems/bootmatrix.py --clock` checks it).
+* After an unclean stop while the disks were being written, `fsck -p` in 2.11BSD's `/etc/rc` can
+  meet an inconsistency it may not repair alone ("UNEXPECTED INCONSISTENCY; RUN fsck MANUALLY",
+  "Automatic reboot failed... help!") and leave a root shell, at every later boot too (measured:
+  6 of 12 SIGKILLs during a `cp -r` on `bsd211`, 2 of 12 on `bsd211-pl499`). Both entries have a
+  persistent `dialog.ini` rule on that prompt: `fsck -y; reboot -n` (no sync: the kernel's copy of
+  a repaired root is stale).
 * `www.retro11.de` (w11 kits: V7, RSX) answered HTTP 503 for every request on 2026-10-22; the
   Internet Archive mirrors listed for those kits were verified the same day.
 * The UNIX V6 kit's root file system has a damaged free list (`icheck /dev/rk0`: `3 dups in
   free`), which cross-links new files and breaks `cc`. The notes explain the one-time repair
   (`icheck -s /dev/rrk0`, then pull the plug and boot again); the image is not modified.
+* The RSX-11M-PLUS kit counts 50 clock ticks per second, so `boot.ini` sets the KW11-L to 50 Hz,
+  as for 2.11BSD pl499 (at SimH's default 60 Hz the clock gained 12 s a minute).
 * RT-11 V5.3 comes as the distribution disk: its first boot answers the RT11AI questions
   (RETURN, NO, RETURN), which writes the RT11FB bootstrap and reboots; later boots go straight
   to RT-11FB. RT-11 never executes WAIT, hence `speed: authentic`.

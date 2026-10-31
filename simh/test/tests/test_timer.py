@@ -16,9 +16,12 @@ them (panel HALT, the speed commands at the prompt, CONT).  Without the
 patch the clock stalls after fast -> authentic (the tick size calibrated
 unthrottled is kept), stalls after authentic -> fast and a burst (the idle
 rate measured while throttled is kept), and every start of the throttle
-costs the guest up to a second."""
+costs the guest up to a second.  A stop must also leave the wait of a unit
+co-scheduled with the clock as it was: counted twice, it grew to a minute of
+a deaf console under pdp11d's stops (speed switches, steps)."""
 
 import os
+import random
 import re
 import time
 import unittest
@@ -60,6 +63,7 @@ clk:    inc @#TICKS
         rti
 """
 MIN_RATE = 30.0                 # ticks/s (60 nominal) where the bugs give 0-5
+STOPS = 300                     # test_stop_keeps_console_poll
 
 # Kernel program at 1000 for the speed switches: KW11-L interrupts counted at
 # 3000 and copied to the display register; SR<0> = 1 busy loop, 0 WAIT loop.
@@ -271,3 +275,25 @@ class TestSpeedSwitch(unittest.TestCase):
                       % (error, (stop.time - t_restart) + (t_end - t_cont)))
         self.assertGreater(error, -0.4, "the start of the throttle cost the guest time")
         self.assertNotIn("WARNING", auth.text)  # "Host CPU could be too slow": a stale measurement
+
+    def test_stop_keeps_console_poll(self):
+        """SHOW QUEUE at many stops: the console poll waits one tick, so a stop
+        moves it to the next tick with no time left over.  With the queue's head
+        counted twice every stop that finds it queued adds a tick (16666 usecs);
+        with a stop every few ticks and a long wait that grew to a minute.  A
+        few leftovers are allowed: on a host that stalls the simulator the
+        poll can really be 2 ticks away (one tick size is the last second's)."""
+        sim, p = self.start("stops", FAST, 0)        # the WAIT loop
+        time.sleep(2.0)                                 # past the first calibration seconds
+        left = []
+        for i in range(STOPS):
+            time.sleep(random.uniform(0.02, 0.03))
+            self.halt(sim, p)
+            m = re.search(r"\bTTI at \d+(?: plus (\d+) usecs)?", sim.command("show queue"))
+            self.assertTrue(m, "the console poll is not queued")
+            if m.group(1):
+                left.append(int(m.group(1)))
+            sim.start("cont")
+        config.report("console poll, %d stops: time left over at %d, at most %d usecs"
+                      % (STOPS, len(left), max(left, default=0)))
+        self.assertLessEqual(len(left), STOPS // 100, left)

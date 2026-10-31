@@ -21,8 +21,8 @@ only).  For every selected system it
 6. optionally (``--tty``) appends pdp11d's ``attach -u [-m] <dev> <listener>``
    line, performs the OS-side steps from TTY_PROCEDURES and logs in over a
    telnet connection to the extra terminal line;
-7. optionally (``--clock``) checks on the Unix systems that the guest clock
-   keeps time: ``date``, CLOCK_SECS of wall time, ``date``.
+7. optionally (``--clock``) checks on the Unix systems, RT-11 and RSX that the
+   guest clock keeps time: ``date`` (TIME, TIM), CLOCK_SECS of wall time, again.
 
 ``readyPattern`` and every ``expect`` of a step are literal, case-sensitive
 substrings of the console output (like SimH EXPECT without -r).
@@ -79,6 +79,8 @@ HALT_WAIT_AFTER_SCRIPT = 30.0   # PANEL_LOGIC.md "shutdownOS": wait for the CPU 
 SETTLE_AFTER_SCRIPT = 3.0       # ... or, if the script ends without a halt, 3 s more
 ANSWER_DELAY = 0.25             # ... and the pause between an expect match and the next send
 CLOCK_SECS = 20.0               # --clock: wall time between the two "date" commands
+# --clock: the command that prints HH:MM:SS and the prompt after it (Unix: date, "# ")
+CLOCK_COMMANDS = {"rt11": ("TIME\r", "\r\n."), "rsx11mp": ("TIM\r", ">")}
 
 # DESIGN.md section 6 "stdout framing".
 STOP_RE = re.compile(r"^(?P<why>.*), PC: (?P<pc>[0-7]+)(?: \((?P<insn>.*)\))?$")
@@ -1104,8 +1106,8 @@ class Runner:
                 self._boot(system, sim, console, rundir, res)
                 if not self.args.no_session:
                     self._session(system, sim, console, res)
-                if self.args.clock and system.raw.get("category") == "unix":
-                    self._clock(sim, console, res)
+                if self.args.clock and (system.raw.get("category") == "unix" or system.id in CLOCK_COMMANDS):
+                    self._clock(system, sim, console, res)
                 if self.args.tty:
                     self._tty(system, sim, console, log, res, lines)
                 self._idle(sim, res)
@@ -1208,9 +1210,10 @@ class Runner:
         console.writer.drain()
         res.session_secs = round(time.monotonic() - t0, 2)
 
-    def _clock(self, sim: Simulator, console: Line, res: Result) -> None:
-        """At the shell prompt the session left: date, CLOCK_SECS, date."""
+    def _clock(self, system: "System", sim: Simulator, console: Line, res: Result) -> None:
+        """At the prompt the session left: date, CLOCK_SECS, date."""
         res.phase = "clock"
+        command, prompt = CLOCK_COMMANDS.get(system.id, ("date\r", "# "))
         secs: list[int] = []
         at: list[float] = []
         for i in range(2):
@@ -1219,11 +1222,11 @@ class Runner:
             console.boundary()
             start = console.mark
             at.append(time.monotonic())
-            console.send("date\r")
-            console.expect("# ", STEP_TIMEOUT, abort=lambda: self._unexpected_stop(sim))
+            console.send(command)
+            console.expect(prompt, STEP_TIMEOUT, abort=lambda: self._unexpected_stop(sim))
             t = clock_seconds(console.out.text(start)[:console.mark - start])
             if t is None:
-                raise HarnessError("no time in the output of date: %r" % console.out.text(start)[:200])
+                raise HarnessError("no time in the output of %s: %r" % (command.strip(), console.out.text(start)[:200]))
             secs.append(t)
         guest = (secs[1] - secs[0]) % 86400
         wall = at[1] - at[0]
@@ -1372,7 +1375,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--tty", action="store_true", help="also verify a telnet login on the extra terminal lines")
     ap.add_argument("--tty-listener", default="127.0.0.1:PORT", help="listener spec passed to attach (PORT = a free port)")
     ap.add_argument("--clock", action="store_true",
-                    help="Unix systems: after the session, check that the guest clock keeps time (date, %.0f s, date)" % CLOCK_SECS)
+                    help="Unix systems, RT-11, RSX: after the session, check that the guest clock keeps time (date, %.0f s, date)" % CLOCK_SECS)
     ap.add_argument("--allow-diag", action="append", default=[], help="regex of start-up diagnostics not treated as power-on errors")
     ap.add_argument("--no-panel", action="store_true", help="do not attach the panel export even if the binary has it")
     ap.add_argument("--sr", type=lambda v: int(v, 8), default=0, help="switch register (octal) written at power-on, like pdp11d")

@@ -52,7 +52,8 @@ DIST_FILES  := install.sh README.md LICENSE THIRD_PARTY.md deploy/pdp11d.service
 ARM64_OUTPUT ?= -t $(IMAGE):$(TAG)-arm64 --load
 DIST_PLATFORM ?= linux/arm64
 DIST_GO_IMAGE ?=
-# The mtime of every file in a dist tarball: the time of the last commit.
+# The mtime of every file in a dist tarball and the build date in the simulator:
+# the time of the last commit.
 SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || echo 0)
 
 # Archives for the tests that boot an operating system (README.md
@@ -71,9 +72,12 @@ build: $(BIN)/pdp11 pdp11d
 # SimH's makefile has no incremental build (about 20 s): rebuild only when
 # the patches, the panel device or the pinned commit change. MAKEFLAGS is
 # dropped so that variables given to this make (BIN=...) do not reach SimH's
-# makefile, which has variables of the same names.
+# makefile, which has variables of the same names. SOURCE_DATE_EPOCH: GCC uses
+# it for __DATE__ and __TIME__ in SimH, so a rebuild of the same commit with the
+# same compiler gives the same simulator (and "make dist" the same tarball).
 $(BIN)/pdp11: $(SIMH_DEPS)
-	env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL simh/build.sh --src $(SIMH_SRC) --out $(BIN)
+	env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
+		simh/build.sh --src $(SIMH_SRC) --out $(BIN)
 
 pdp11d:
 	mkdir -p $(BIN)

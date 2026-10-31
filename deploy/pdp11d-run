@@ -14,8 +14,6 @@
 set -eu
 
 env_file=${PDP11_ENV_FILE:-/etc/pdp11/pdp11d.env}
-user=pdp11
-bin=/opt/pdp11/bin/pdp11d
 
 export PDP11_DATA=/var/lib/pdp11
 export PDP11_SHM=/run/pdp11/panel
@@ -103,6 +101,11 @@ if [ -r "$env_file" ]; then
 	eval "$settings"
 fi
 
+# After the settings: a line "bin=..." or "user=..." there is no setting of this
+# script (under systemd neither has a meaning): it must not choose what runs as root.
+user=pdp11
+bin=/opt/pdp11/bin/pdp11d
+
 # low_port [serve flags...]: whether pdp11d (PDP11_LISTEN, --listen) or the
 # simulator (PDP11_TTY_TELNET, --tty-telnet) listens on a port that needs
 # CAP_NET_BIND_SERVICE (below net.ipv4.ip_unprivileged_port_start).
@@ -125,6 +128,10 @@ low_port() {
 
 umask 027
 if [ "$(id -u)" != 0 ]; then
+	# Only root can create /run/pdp11: without it, use pdp11d's default panel file.
+	case $PDP11_SHM in
+	/run/pdp11/*) [ -w /run/pdp11 ] || export PDP11_SHM=/dev/shm/pdp11d-panel ;;
+	esac
 	exec "$bin" serve "$@"
 fi
 

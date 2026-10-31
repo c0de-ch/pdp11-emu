@@ -7,8 +7,9 @@ licences). All URLs are relative. `index.html` carries
 UI reloads when `hello.server` differs, at most once per version per browser
 session, then it shows a toast). Visual reference: research r4
 (`docs/research/r4-visual-spec.md`, element table
-`docs/research/r4-assets/panel1170_elements.json`, photos under the research
-scratch dir `r4-visual/shots/`). Protocol: `PROTOCOL.md`.
+`docs/research/r4-assets/panel1170_elements.json`; the photos and screenshots
+it cites stayed in the research session's scratch directory and are not in
+the repository). Protocol: `PROTOCOL.md`.
 
 ## 1. Views and layout
 
@@ -29,7 +30,8 @@ scratch dir `r4-visual/shots/`). Protocol: `PROTOCOL.md`.
 * Pop-out buttons open `window.open('?view=panel', 'pdp11-panel', 'popup,width=…')`
   from the click handler (show a hint if blocked). Each window has its own
   WebSocket; UI preferences sync over `BroadcastChannel('pdp11-ui')`; the main
-  window shows "Panel is in another window — [Bring back]" in its place: a
+  window shows "The front panel is in another window." (or "The console is in
+  another window.") with a [Bring back] button in its place: a
   200 px wide notice beside the remaining view, which is laid out in the rest
   of the width (every frame and hit area stays inside the window).
   Without `BroadcastChannel` pop-outs work but neither sync nor coordinate
@@ -46,7 +48,8 @@ scratch dir `r4-visual/shots/`). Protocol: `PROTOCOL.md`.
 
 * Toolbar: current system (opens the system chooser), power (mirrors the key:
   OFF ↔ POWER, with confirmation), **Boot**, **Shut down OS** (disabled unless
-  the CPU runs and the system has `canShutdown`), speed (fast/authentic), lamp
+  the CPU runs and the system has `canShutdown`), speed (fast/authentic; a radio
+  group: one Tab stop, the arrow keys choose), lamp
   style (LED, PiDP-11, incandescent, reduced motion), console theme, pop-out
   panel, pop-out console, help, status pill (run state, busy operation, ready,
   guest instruction rate, viewers, connection; "not started" while the key is
@@ -99,7 +102,7 @@ scratch dir `r4-visual/shots/`). Protocol: `PROTOCOL.md`.
   Systems with `noLogin` (RT-11,
   RSX-11M-PLUS) get "RT-11 is up — the console is ready (no login needed)": the
   UI never tells the user to log in on them. `needsInstall` opens the
-  licence/install dialog.
+  licence/install dialog; after a Cancel, Boot opens it again.
   `hello.insecure` shows a persistent dismissable banner: "No password set:
   anyone on your network can control this machine".
 * **Help**: system card (notes markdown — headings, lists, code — credentials or
@@ -149,13 +152,15 @@ scratch dir `r4-visual/shots/`). Protocol: `PROTOCOL.md`.
   upper face; darker lower face. BACK (SR = 1, DEP or LAMP TEST raised): almost
   uniformly dark face (rose `#3a0a12`, magenta `#1c0b14`) with a 1.2 mm bright lip
   at the top. FWD (pressed LOAD ADRS/EXAM/CONT/START, HALT, S BUS CYCLE): flat
-  bright face (rose `#ef3c5b`, magenta `#8f5079`) with a small bottom specular.
+  bright face (rose `#ef3c5b`, magenta `#814369`) with a small bottom specular.
   Pose changes animate 60-90 ms; momentary poses are held ≥ 120 ms. Hover/focus
   highlight on each paddle.
 * **Knobs**: black skirt Ø 25 mm, raised bar with white pointer, rotate by
   `transform` (80-120 ms); detents at 22.5° + 45°·k. **Key**: chrome cylinder + bow;
   OFF 225°, POWER 315°, LOCK 45°.
-* Acceptance: a 1340 px wide screenshot overlaid on r4's `bb_composite_1340.png`
+* Acceptance: a 1340 px wide screenshot overlaid on r4's BlinkenBone composite
+  photo (`bb_composite_1340.png`, not in the repository;
+  `web/dev/panel-preview.html?photo=<url>` draws a photo under the panel)
   matches positions (lamps within about 0.5 mm); lamps read as small round red
   LEDs; paddles read as the real bow-tie row.
 
@@ -180,7 +185,7 @@ scratch dir `r4-visual/shots/`). Protocol: `PROTOCOL.md`.
   the knobs and the key, each with a visible focus ring; roving focus over the
   paddles): ←/→ move (Home/End: first/last), ↑ = 1/raise, ↓ = 0/press,
   Space/Enter toggle or press; arrows turn a focused knob or the key; `0`-`7`
-  shift an octal digit into SR, Backspace shifts right, Esc clears SR, `L` LOAD
+  shift an octal digit into SR, Backspace shifts right, Esc or Delete clears SR, `L` LOAD
   ADRS, `E` EXAM, `D` DEP, `C` CONT, `S` START, `H` ENABLE/HALT, `B` S INST/S BUS,
   `T` LAMP TEST (hold), `[`/`]` ADDRESS knob, `{`/`}` DATA knob, `K`/Shift+`K` key
   cw/ccw (OFF asks first).
@@ -207,7 +212,10 @@ scratch dir `r4-visual/shots/`). Protocol: `PROTOCOL.md`.
   PDP-11, whose terminals had no back-tab); F6 moves it to the browser's address
   bar. Help says both. A **screen reader mode** preference (view settings) sets
   xterm.js's `screenReaderMode` (the console text in an accessibility tree).
-  With `prefers-reduced-motion` the cursor does not blink.
+  With `prefers-reduced-motion` the cursor does not blink. Closing the right-click
+  menu from the keyboard or choosing an entry leaves the focus in the terminal;
+  in forced-colours mode (Windows high contrast) the lamps and status dots keep
+  their colours (`forced-color-adjust: none`), since their colour is the message.
 * Key mapping from the selected system's `console` (`backspace`: send DEL `\x7f`,
   BS `\x08` or `#`; `interrupt`: Ctrl+C sends `\x03` or DEL) with a visible
   "authentic keys" toggle (raw xterm behaviour) and `keyHelp` in the console header.
@@ -232,9 +240,12 @@ scratch dir `r4-visual/shots/`). Protocol: `PROTOCOL.md`.
   the terminal.
 * Bell → brief visual flash of the console frame.
 * **Output flow control**: console output is handed to xterm.js while less than
-  64 KiB of it is unparsed (write callbacks); the rest waits in the browser.
-  xterm.js cannot drop what it has queued, so this bounds what a slow client
-  still has to parse when the connection drops.
+  64 KiB of it is unparsed (write callbacks); the rest waits in the browser,
+  merged into 4 KiB blocks. xterm.js cannot drop what it has queued, so this
+  bounds what a slow client still has to parse when the connection drops. More
+  than 4 MiB waiting (a client that cannot keep up, e.g. a hidden tab under an
+  output flood) is dropped: the client reconnects (close code 4001) and the
+  server's history replaces it.
 * **History** (`PROTOCOL.md` §1): on every (re)subscribe `reset()` the terminal;
   the first `0x10` message after it is the history. Output still waiting in the
   browser is dropped, and the reset waits until xterm.js has parsed what it
@@ -276,7 +287,10 @@ about 65 ms per step at authentic speed. (The NOP holds the place of an earlier
 `CLR R1`, which cleared the carry: the light then walked across once and the
 display stayed dark.) The tutorial shows each step with the current octal values
 and may offer an "auto-toggle" button that performs the steps by sending the real
-panel messages (visibly animating the paddles). The end-to-end tests
+panel messages (visibly animating the paddles). The card takes the keyboard focus
+when it opens; Esc closes it and gives the focus back. SimH throttles only about
+2-3 s after START: until then the CPU runs flat out and every DATA lamp glows
+dimly, then the single light walks; the last step says so. The end-to-end tests
 (`server/internal/web/e2e_test.go`, `tests/e2e/`) toggle in exactly this program.
 
 ## 7. Testing hooks

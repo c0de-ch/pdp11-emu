@@ -53,8 +53,9 @@ Why (research r1 and the design review, all verified by experiment):
 * Unpatched SimH can only sample registers and its sampler defeats idling. Our
   patch exports wall-clock-weighted bus samples, registers, run/WAIT state, a live
   switch register and a race-free halt handshake through a shared-memory file
-  (measured cost ≤ 2.9 % of emulated speed; halt latency ≈ 0.1 ms busy and one
-  `sim_idle` sleep, ≈ 10 ms, idle: `SIMH_PATCH.md` §7).
+  (measured cost under 3 % of emulated speed detached, ≤ 3.5 % attached; halt
+  latency ≈ 0.1 ms busy and one `sim_idle` sleep, ≈ 10 ms, idle:
+  `SIMH_PATCH.md` §7).
 
 ## 3. Repository layout
 
@@ -133,7 +134,11 @@ a slow consumer; a gap also shows in `RingWr`), `shm.ErrFormat`.
 | `PDP11_FRAME_HZ` | `60` | lamp frame rate (30-120) |
 | `PDP11_LOG` | `info` | log level: `debug`, `info`, `warn`, `error` (slog text on stderr) |
 
-Booleans accept `1/true/yes/on` and `0/false/no/off`/empty. Every sub-command
+An empty variable means its default (`PDP11_AUTOSTART=` leaves autostart on;
+compose passes settings that `.env` leaves out as empty strings, §13).
+Booleans accept `1/true/yes/on` and `0/false/no/off`; an empty flag value
+(`--autostart=`) is false, and every flag needs a value (a bare `--autostart`
+is a usage error). Every sub-command
 accepts all flags; flags override the environment. An invalid
 `PDP11_ALLOW_ORIGINS`, `PDP11_HOSTS`, `PDP11_FRAME_ANCESTORS` or
 `PDP11_TRUSTED_PROXIES` value stops `serve` before the machine starts (exit
@@ -171,7 +176,9 @@ Sub-commands (exit status 2 for usage and configuration errors):
 * `fetch [--cache DIR] [--accept-license] [id...]`: download and verify
   archives into `DIR` (default: the first `PDP11_CACHE` entry) without
   extracting; an archive that another `PDP11_CACHE` directory, `$DATA/cache`
-  or `$DATA/import` holds is copied instead; no ids = every redistributable
+  or `$DATA/import` holds is copied instead (`--cache` replaces `PDP11_CACHE`,
+  like every flag, and takes the same list: `--cache NEW:OLD` fills `NEW` and
+  also searches `OLD`); no ids = every redistributable
   system; other ids need `--accept-license` or `PDP11_ACCEPT_LICENSES`. Used
   at image build.
 * `install [--accept-license] id...`: install into `$DATA` (prints the licence
@@ -204,10 +211,12 @@ powered on.
    or it is in `PDP11_ACCEPT_LICENSES`, install it now (state `starting`,
    progress via `Systems.SubscribeProgress`; an install of it that another
    client started is waited for); else return `ErrNoSystem` (no state change,
-   `LastError` explains; the UI offers the licence dialog).
+   `LastError` explains; the UI offers the licence dialog). An install over a
+   completed one (a working disk went missing) restores only the missing
+   disks (logged at warn); only a factory reset replaces the others.
 2. `PrepareRun` writes `$DATA/run/run.ini` = generated header + the system's
    `boot.ini` with `${DISKn}` replaced by absolute paths of the working copies
-   (all of which must exist; "a factory reset restores it"). It fails while the
+   (all of which must exist; "the next power-on restores it", step 1). It fails while the
    system is being installed or reset (`ErrBusy`), and leases the system's
    images until `RunConfig.Release`, which the Machine calls once the
    simulator's process has exited or could not be started (§7). Header
@@ -470,7 +479,13 @@ others fully allocated (no fragmentation, no ENOSPC at run time). A cancel or
 an error in this phase deletes the `.part` files and leaves the old images and
 `.installed` as they were. Then, not cancellable: remove `.installed`, rename
 every file into place, write `.installed` (a crash in between leaves the system
-without `.installed`, so that it is installed again). Errors name the file,
+without `.installed`, so that it is installed again). An install over a
+completed one (a working disk went missing, §6) renames only the missing files
+and leaves `.installed` in place: the disks that are left hold the user's data,
+and only a factory reset replaces those. Once `serve` or `install` holds the
+data directory's lock it deletes what a crash left and nothing else would
+remove: `systems/**/*.part` and `cache/.<sha256>.copy-*`; a partial download
+stays and is resumed. Errors name the file,
 size, sha256 and every URL tried (and the import directory). Installs are
 serialized (others wait, "Waiting for another installation to finish"; a
 second install of the same id → `ErrBusy`); installing an installed system
@@ -614,7 +629,10 @@ request with `Systems.SetSpeedFor(Selected(), s)` and, if powered,
   messages); a client whose send queue exceeds 4 MiB is disconnected; the
   kernel send buffer of every connection is capped at 256 KiB (otherwise a
   stalled browser absorbs megabytes before its queue grows); request headers
-  ≤ 64 KiB, read within 10 s.
+  ≤ 64 KiB, read within 10 s. The writer of a connection leaves 4 ms between
+  writes and merges what arrives meanwhile: SimH delivers console output a few
+  bytes at a time, and one message per few bytes (up to 20000 a second) makes a
+  slower browser fall behind and reconnect.
 * Every response carries `Content-Security-Policy: default-src 'self';
   script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:
   blob:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors
@@ -666,8 +684,10 @@ User documentation: `README.md` (Docker, compose, native install) and
   systemd unit set `PDP11_SHUTDOWN_ON_STOP=1` and allow pdp11d ≥ 75 s to stop
   (§6): `compose.yaml` and the unit use 90 s; a plain `docker run`/`docker stop`
   needs `--stop-timeout 90`/`-t 90` (Docker's default is 10 s). A clean 2.11BSD
-  shutdown takes 12-16 s; an unclean stop costs a ~30 s fsck (and a
-  self-reboot) at the next boot. The code default stays `false`.
+  shutdown takes 12-16 s; after an unclean stop the next boot takes 20-35 s
+  longer (fsck and a self-reboot: 30-45 s to `login:` instead of 10; `dialog.ini`
+  answers fsck's "RUN fsck MANUALLY" with `fsck -y`). The code default stays
+  `false`.
 * **Docker** (`Dockerfile`, `.dockerignore` keeps `simh/src`, `simh/out`, local
   data and dev tooling out of the context): every stage that compiles runs on the
   build platform — SimH via `simh/build.sh` with a cross C compiler (`CC=…`,
@@ -715,12 +735,15 @@ User documentation: `README.md` (Docker, compose, native install) and
   `PDP11_SHUTDOWN_ON_STOP=1`, `EnvironmentFile=-/etc/pdp11/pdp11d.env`
   (overrides), `StateDirectory=pdp11`, `TimeoutStopSec=90`, `KillMode=mixed`
   (only pdp11d gets SIGTERM; it stops the simulator itself),
-  `Restart=on-failure`, `NoNewPrivileges=yes`,
+  `Restart=on-failure` with `RestartPreventExitStatus=2` (another pdp11d on the
+  data directory, an invalid setting: a restart cannot help), `NoNewPrivileges=yes`,
   `AmbientCapabilities=`/`CapabilityBoundingSet=CAP_NET_BIND_SERVICE` (ports
   below 1024); no mount-namespace sandboxing (fails in unprivileged LXC with
   226/NAMESPACE). Without systemd, `/opt/pdp11/bin/pdp11d-run` sets up the
   same environment (the settings file read with systemd's `EnvironmentFile=`
-  rules) and execs pdp11d; run as root it drops to the user `pdp11` with
+  rules) and execs pdp11d; run as another user it takes pdp11d's default panel
+  file unless `/run/pdp11` is writable (only root can create it); run as root it
+  drops to the user `pdp11` with
   `setpriv`, keeping `CAP_NET_BIND_SERVICE` as an ambient capability, and
   where that is impossible it runs without it and warns if a port below
   `ip_unprivileged_port_start` is configured.
@@ -733,7 +756,9 @@ User documentation: `README.md` (Docker, compose, native install) and
   `dist-docker` / `dist-arm64` (a tarball of prebuilt binaries, their
   `licenses/` and `install.sh`, built on the host or with the Dockerfile on
   Debian 13; owner 0:0, no group/other write, sorted, every mtime
-  `SOURCE_DATE_EPOCH`, `gzip -n`), `clean`, `distclean`. `PDP11_TEST_CACHE`
+  `SOURCE_DATE_EPOCH`, `gzip -n`; `make dist` also builds the simulator with
+  `SOURCE_DATE_EPOCH`, so a rebuild of a commit with the same compiler gives the
+  same tarball), `clean`, `distclean`. `PDP11_TEST_CACHE`
   is passed through when set.
 * **docs/PROXMOX.md**: prefer a native install in an unprivileged Debian CT over
   Docker-in-LXC (needs nesting/keyctl); time zone; reverse-proxy notes
@@ -758,8 +783,8 @@ running it needs arm64 hardware or an emulator.
   needs an absolute path, and `-simh` defaults to `simh/out/pdp11`; a file
   named by a flag that does not exist fails the test). Tests that need OS
   archives (the real-simulator tests of `internal/simh` and `cmd/pdp11d`, the
-  `tarZ` extraction test, the boot matrix) read catalog archives from
-  `PDP11_TEST_CACHE` (named by their
+  `tarZ` extraction test, the boot matrix through pdp11d) read catalog
+  archives from `PDP11_TEST_CACHE` (named by their
   sha256, as `pdp11d fetch --cache DIR` writes them), extract what they need
   into temporary directories and skip without it; the simulator is
   `simh/out/pdp11` or `PDP11_TEST_SIMH`. The boot matrix through pdp11d itself:
@@ -768,11 +793,13 @@ running it needs arm64 hardware or an emulator.
   empty data directory: autostart to ready, the session typed over the
   WebSocket, panel frames, `shutdownOS`; 2.11BSD also restarts without fsck, a
   telnet login on a DZ line and a SIGTERM with `PDP11_SHUTDOWN_ON_STOP`;
-  `-clock` also checks the Unix guests' clocks).
+  `-clock` also checks the clocks of the Unix guests, RT-11 and RSX).
 * `python3 -I simh/test/run_tests.py` (`SIMH_PATCH.md` §7).
 * `python3 -I tests/systems/bootmatrix.py` (every catalog entry: boot, session,
   idle CPU, shutdown script, optionally the terminal lines and, with
-  `--clock`, whether the Unix guests' clocks keep time;
+  `--clock`, whether the clocks of the Unix guests, RT-11 and RSX keep time; the
+  archives come from its `--cache` directories, and missing ones are downloaded,
+  not skipped;
   `tests/systems/README.md`) and its unit tests `tests/systems/test_bootmatrix.py`.
 * `python3 -I deploy/test_pdp11d_run.py`: `pdp11d-run`'s reading of the
   settings file against systemd's rules, under dash, bash and busybox sh.

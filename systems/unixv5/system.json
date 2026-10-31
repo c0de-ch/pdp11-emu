@@ -18,7 +18,7 @@
       "note": "no password"
     }
   ],
-  "shutdown": "V5 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you (logging in as root first if needed).",
+  "shutdown": "V5 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you: it first types root, which logs in at login: and is harmless at a shell prompt; leave any program first.",
   "shutdownScript": [
     {
       "send": "root\r"

@@ -173,6 +173,8 @@ The table is produced by `scripts/finaltable.py` and saved as `results/final/tab
 **Matching distribution tape (optional, for reinstalling).** `pidp-pl499.tap.gz`
 * 24,892,185 bytes, sha256 `fb4f330d…d6ab`. Unpacked: 82,107,056 bytes.
 
+(2026-10-30: this section describes the file as downloaded then; the catalog's pin has since moved to the file of 2026-10-27, see `systems/README.md`.)
+
 **Notes.**
 * The site is Johnny Billquist's, the former `ftp.update.uu.se`. `Patches/` there runs up to patch 499, dated 13 Jan 2026.
 * `/VERSION` inside the image reads "Current Patch Level: 499, Date: January 2, 2026".

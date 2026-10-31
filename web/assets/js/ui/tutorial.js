@@ -45,16 +45,31 @@ export class Tutorial {
         h('button', { type: 'button', class: 'btn', onclick: () => this.advance(1) }, 'Next'),
         this.autoBtn));
     this.dragging(head);
+    // a non-modal card at the end of the page, behind the console (Tab goes to the
+    // PDP-11 there): the keyboard goes to it when it opens, Esc gives the focus back
+    this.el.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      this.close();
+    });
+    this.prevFocus = document.activeElement;
     document.body.append(this.el);
     this.render();
+    this.autoBtn.focus({ preventScroll: true });
     this.unsub = this.app.onSent((m) => this.observe(m));
   }
 
   close() {
     this.stop();
     this.unsub?.();
+    const inside = this.el?.contains(document.activeElement);
     this.el?.remove();
     this.el = null;
+    if (inside) {
+      const back = this.prevFocus;
+      if (back && back !== document.body && document.contains(back)) back.focus({ preventScroll: true });
+      else this.app.console?.focus();
+    }
   }
 
   dragging(handle) {
@@ -85,7 +100,7 @@ export class Tutorial {
       [h('span', {}, 'Set the switch register to ', h('b', {}, '001000'), ' (switch 9 up) and press ', h('b', {}, 'LOAD ADRS'), '.')],
       [h('span', {}, 'For each word: set the switches to it and raise ', h('b', {}, 'DEP'), '. Each DEP after the first steps the address by 2.'), words],
       [h('span', {}, 'Set the switches to ', h('b', {}, '001000'), ', press ', h('b', {}, 'LOAD ADRS'), ', set ', h('b', {}, 'ENABLE/HALT'), ' up to ENABLE and press ', h('b', {}, 'START'), '.')],
-      [h('span', {}, 'Turn the ', h('b', {}, 'DATA'), ' knob to ', h('b', {}, 'DISPLAY REGISTER'), ': a single light walks across the DATA lamps.')],
+      [h('span', {}, 'Turn the ', h('b', {}, 'DATA'), ' knob to ', h('b', {}, 'DISPLAY REGISTER'), ': a single light walks across the DATA lamps (for the first 2-3 s the CPU runs flat out and all of them glow dimly).')],
     ];
   }
 

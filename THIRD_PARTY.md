@@ -1,8 +1,10 @@
 # Third-party software and data
 
-pdp11-emu's own code (pdp11d, the web UI, the SimH patches and the panel
-device, the catalog, the scripts) is under the MIT licence: [`LICENSE`](LICENSE),
-"Copyright (c) 2026 The pdp11-emu authors".
+pdp11-emu's own code (pdp11d, the web UI, the panel device in
+[`simh/panel/`](simh/panel), the catalog, the scripts) is under the MIT
+licence: [`LICENSE`](LICENSE), "Copyright (c) 2026 The pdp11-emu authors". The
+patches in [`simh/patches/`](simh/patches) change Open SIMH's own files and are
+offered under Open SIMH's X11-style licence (below), as their headers say.
 
 The binaries and the Docker image also contain the components below. Their
 licence texts ship with the binaries, collected by
@@ -15,7 +17,7 @@ of a `make dist` tarball.
 
 | Component | Version | Licence | Where it ends up |
 |---|---|---|---|
-| [Open SIMH](https://github.com/open-simh/simh) (PDP-11 simulator) | commit `87eb7d5e96f9` (2026-09-22, [`simh/SIMH_COMMIT`](simh/SIMH_COMMIT)) plus [`simh/patches/`](simh/patches) and [`simh/panel/`](simh/panel) | X11-style licence, "Copyright (c) Robert M Supnik and the Open SIMH contributors" (`LICENSE.txt` of the SimH tree; the patches are offered under the same terms) | the `pdp11` binary |
+| [Open SIMH](https://github.com/open-simh/simh) (PDP-11 simulator) | commit `87eb7d5e96f9` (2026-09-22, [`simh/SIMH_COMMIT`](simh/SIMH_COMMIT)) plus [`simh/patches/`](simh/patches) and [`simh/panel/`](simh/panel) | X11-style licence (`LICENSE.txt` of the SimH tree, which has no copyright line of its own: the notices, chiefly "Copyright (c) 1993-2022, Robert M Supnik" and those of the other Open SIMH contributors, are in the headers of the source files); the patches are offered under the same terms | the `pdp11` binary |
 | Slirp, bundled with Open SIMH (its NAT network transport, compiled in, not used by the appliance) | as in the SimH commit | BSD 2-Clause, Copyright (c) 1995, 1996 Danny Gasparovski and others (`slirp/COPYRIGHT` of the SimH tree) | the `pdp11` binary |
 | [xterm.js](https://github.com/xtermjs/xterm.js) (`@xterm/xterm`) | 6.0.0 | MIT, "Copyright (c) 2017-2019, The xterm.js authors", 2014-2016 SourceLair, 2012-2013 Christopher Jeffrey ([`web/assets/vendor/xterm/LICENSE.txt`](web/assets/vendor/xterm/LICENSE.txt)) | the web UI, embedded in `pdp11d` |
 | [Glass TTY VT220](https://github.com/svofski/glasstty) font, Viacheslav Slavinsky | commit `2bed112c` | The Unlicense (public domain) ([`LICENSE-glass-tty-vt220.txt`](web/assets/fonts/LICENSE-glass-tty-vt220.txt)) | `web/assets/fonts/glass-tty-vt220.woff2` (console) |
@@ -67,7 +69,7 @@ images or caches built by this project.
 
 `web/dev/` uses [ws](https://github.com/websockets/ws) 8.22.0 (MIT) for the
 mock server and, optionally, [playwright-core](https://github.com/microsoft/playwright)
-(Apache 2.0) for the UI tests; `web/dev/build-fonts.py` uses fontTools (MIT)
+(Apache 2.0) for the UI tests and `tests/e2e/`; `web/dev/build-fonts.py` uses fontTools (MIT)
 and Brotli (MIT). The build uses the official `golang` and Debian images and
 Debian's compilers; none of them is part of the runtime image beyond what is
 listed above.

@@ -19,9 +19,10 @@
 // down with shutdownOS (RT-11: key OFF) and requires run off and the key at
 // OFF within the script's budget; then SIGTERM ends pdp11d.
 //
-// 2.11BSD (bsd211) gets two more starts on the same data directory: the
-// key turned to POWER boots without fsck (ready < 20 s), a telnet login on
-// a DZ line works (PDP11_TTY_TELNET) and SIGTERM with
+// 2.11BSD gets two more starts on the same data directory: the key turned to
+// POWER boots without fsck (ready < 20 s), a telnet login on a DZ line works
+// (PDP11_TTY_TELNET; bsd211 only: pl499's lines stay off until the user enables
+// them, tests/systems/bootmatrix.py --tty covers those) and SIGTERM with
 // PDP11_SHUTDOWN_ON_STOP=1 shuts the OS down cleanly; the next start
 // autostarts (the key stayed at POWER), again without fsck.
 package main
@@ -34,6 +35,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -61,7 +63,7 @@ var (
 	mxPort    = flag.Int("port-base", 23500, "first PDP11_PORT_BASE (10 in turn, steps of 10; +5 is the telnet listener)")
 	mxSIMH    = flag.String("simh", "../../../simh/out/pdp11", "patched simulator")
 	mxTypist  = flag.Duration("typist", 40*time.Millisecond, "delay between typed characters")
-	mxClock   = flag.Bool("clock", false, "Unix systems: after the session, check that the guest clock keeps time while idle (date, 20 s, date)")
+	mxClock   = flag.Bool("clock", false, "Unix systems, RT-11, RSX: after the session, check that the guest clock keeps time while idle (date, 20 s, date)")
 )
 
 // childEnv marks the re-executed test binary that runs pdp11d.
@@ -173,9 +175,14 @@ func (mx *matrix) system(t *testing.T, sys *catalog.System, round int) []result 
 	}
 	var out []result
 	out = append(out, mx.start(t, sys, dir, startCfg{name: "fresh", session: true, stop: stop}))
-	if sys.ID == "bsd211" && out[0].Result == "PASS" {
-		out = append(out, mx.start(t, sys, dir, startCfg{name: "key on, tty, SIGTERM", keyOn: true, tty: true, noFsck: true, stop: "sigterm",
-			env: map[string]string{"PDP11_TTY_TELNET": "TTY", "PDP11_SHUTDOWN_ON_STOP": "1"}}))
+	if (sys.ID == "bsd211" || sys.ID == "bsd211-pl499") && out[0].Result == "PASS" {
+		later := startCfg{name: "key on, tty, SIGTERM", keyOn: true, tty: true, noFsck: true, stop: "sigterm",
+			env: map[string]string{"PDP11_TTY_TELNET": "TTY", "PDP11_SHUTDOWN_ON_STOP": "1"}}
+		if sys.ID != "bsd211" {
+			later.name, later.tty = "key on, SIGTERM", false
+			later.env = map[string]string{"PDP11_SHUTDOWN_ON_STOP": "1"}
+		}
+		out = append(out, mx.start(t, sys, dir, later))
 		out = append(out, mx.start(t, sys, dir, startCfg{name: "autostart", noFsck: true, stop: "shutdownOS"}))
 	}
 	return out
@@ -288,13 +295,15 @@ func (mx *matrix) start(t *testing.T, sys *catalog.System, dir string, cfg start
 		r.Session = "ok"
 	}
 
-	if *mxClock && cfg.session && sys.Category == "unix" {
-		guest, wall, err := v.clockRate()
+	if cc, ok := clockCommand(sys); *mxClock && cfg.session && ok {
+		guest, wall, err := v.clockRate(cc)
 		if err != nil {
 			return fail("clock probe: %v", err)
 		}
 		r.Notes += fmt.Sprintf("guest clock +%d s in %.1f s; ", guest, wall)
-		if float64(guest) < wall/2 || float64(guest) > wall*2 {
+		// As tests/systems/bootmatrix.py: a kernel built for 50 Hz under
+		// SimH's default 60 Hz gains 20 %.
+		if math.Abs(float64(guest)-wall) > 1+0.1*wall {
 			return fail("the guest clock advanced %d s in %.1f s of wall time", guest, wall)
 		}
 	}
@@ -777,9 +786,27 @@ func (v *viewer) steps(mark int, steps []catalog.Step) error {
 
 var reClock = regexp.MustCompile(`\b(\d\d):(\d\d):(\d\d)\b`)
 
-// clockRate types "date" twice, 20 s apart, at a Unix shell prompt and
+// clockCmd is the command that prints the guest's HH:MM:SS and the prompt
+// that follows it.
+type clockCmd struct{ send, prompt string }
+
+// clockCommand returns the clock probe of a system; RSTS/E has none that
+// prints seconds.
+func clockCommand(sys *catalog.System) (clockCmd, bool) {
+	switch {
+	case sys.Category == "unix":
+		return clockCmd{"date\r", "# "}, true
+	case sys.ID == "rt11":
+		return clockCmd{"TIME\r", "\r\n."}, true
+	case sys.ID == "rsx11mp":
+		return clockCmd{"TIM\r", ">"}, true
+	}
+	return clockCmd{}, false
+}
+
+// clockRate types the clock command twice, 20 s apart, at a prompt and
 // returns how far the guest clock advanced and the wall time in between.
-func (v *viewer) clockRate() (guest int, wall float64, err error) {
+func (v *viewer) clockRate(cc clockCmd) (guest int, wall float64, err error) {
 	var secs [2]int
 	var at [2]time.Time
 	for i := range secs {
@@ -788,15 +815,15 @@ func (v *viewer) clockRate() (guest int, wall float64, err error) {
 		}
 		from := v.size()
 		at[i] = time.Now()
-		if err := v.typeText("date\r"); err != nil {
+		if err := v.typeText(cc.send); err != nil {
 			return 0, 0, err
 		}
 		deadline := time.Now().Add(60 * time.Second)
 		for {
-			if j := v.find(from+5, []byte("# ")); j >= 0 {
+			if j := v.find(from+len(cc.send), []byte(cc.prompt)); j >= 0 {
 				m := reClock.FindSubmatch(v.consoleCopy()[from:j])
 				if m == nil {
-					return 0, 0, fmt.Errorf("no time in the output of date")
+					return 0, 0, fmt.Errorf("no time in the output of %q", cc.send)
 				}
 				h, _ := strconv.Atoi(string(m[1]))
 				mi, _ := strconv.Atoi(string(m[2]))
@@ -805,7 +832,7 @@ func (v *viewer) clockRate() (guest int, wall float64, err error) {
 				break
 			}
 			if time.Now().After(deadline) {
-				return 0, 0, fmt.Errorf("date: no prompt within 60 s")
+				return 0, 0, fmt.Errorf("%q: no prompt within 60 s", cc.send)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}

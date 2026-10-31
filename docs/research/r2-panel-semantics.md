@@ -1,6 +1,6 @@
 # R2: PDP-11/70 front panel, behavioral spec and how SimH replicas implement it
 
-Researcher: r2-realcons. Research phase only. Nothing was written to /home/kim/dev/repos/pdp11-emu.
+Researcher: r2-realcons. Research phase only. Nothing was written to the repository.
 
 Legend used throughout:
 - **VERIFIED (src)**: I read it in the cited source file or line.

@@ -56,14 +56,17 @@ export function attachMenu(anchor, items) {
       else if (e.key === 'ArrowUp') btns[(i - 1 + btns.length) % btns.length]?.focus();
       else if (e.key === 'Home') btns[0]?.focus();
       else if (e.key === 'End') btns[btns.length - 1]?.focus();
-      else if (e.key === 'Escape' || e.key === 'Tab') close(e.key === 'Escape');
-      else return;
+      else if (e.key === 'Escape') close();
+      else if (e.key === 'Tab') {
+        close(); // back on the button: the browser's Tab moves on from there
+        return;
+      } else return;
       e.preventDefault();
     });
     document.body.append(menu);
     const r = anchor.getBoundingClientRect();
     const m = menu.getBoundingClientRect();
-    menu.style.top = `${Math.min(r.bottom + 4, innerHeight - m.height - 4)}px`;
+    menu.style.top = `${Math.max(4, Math.min(r.bottom + 4, innerHeight - m.height - 4))}px`;
     menu.style.left = `${Math.max(4, Math.min(r.right - m.width, innerWidth - m.width - 4))}px`;
     anchor.setAttribute('aria-expanded', 'true');
     document.addEventListener('pointerdown', outside, true);

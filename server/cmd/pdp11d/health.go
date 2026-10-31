@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -22,6 +23,9 @@ func health(args []string, getenv func(string) string, stdout, stderr io.Writer)
 	timeout := fs.Duration("timeout", 5*time.Second, "request timeout")
 	cfg, _, err := loadConfig(fs, args, getenv)
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		fmt.Fprintln(stderr, "pdp11d health:", err)
 		return 2
 	}

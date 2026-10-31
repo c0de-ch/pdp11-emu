@@ -10,7 +10,8 @@
 #                    simh/src); only LICENSE.txt and slirp/COPYRIGHT are read.
 #
 # OUT (a new or empty directory) receives
-#   open-simh.txt, open-simh-slirp.txt   the SimH tree's LICENSE.txt and slirp/COPYRIGHT
+#   open-simh.txt, open-simh-slirp.txt   the SimH tree's LICENSE.txt (under a copyright line)
+#                                        and slirp/COPYRIGHT
 #   go.txt                               the licence of the Go toolchain ($GO env GOROOT)
 #   github.com_<owner>_<name>.txt        LICENSE of every module linked into pdp11d
 #   xterm.js.txt, font-<name>.txt        the web UI's vendored licence files
@@ -45,7 +46,14 @@ install -d -m 0755 "$out" "$out/systems"
 for f in LICENSE.txt slirp/COPYRIGHT; do
 	[ -f "$simh_src/$f" ] || die "$simh_src/$f is missing (--simh-src: the SimH work tree)"
 done
-put "$simh_src/LICENSE.txt" open-simh.txt
+# LICENSE.txt has no copyright line of its own (the notices it refers to are in
+# the headers of the source files): name the holders here.
+{
+	printf 'Open SIMH. Copyright (c) 1993-2022, Robert M Supnik, and the other authors named\n'
+	printf 'in the headers of the source files (https://github.com/open-simh/simh).\n\n'
+	cat "$simh_src/LICENSE.txt"
+} >"$out/open-simh.txt"
+chmod 0644 "$out/open-simh.txt"
 put "$simh_src/slirp/COPYRIGHT" open-simh-slirp.txt
 
 cd "$root"
@@ -58,7 +66,10 @@ if [ ! -f "$golicense" ] && pkg=$(dpkg -S "$(readlink -f "$goroot/bin/go")" 2>/d
 fi
 [ -f "$golicense" ] || die "no licence file of the Go toolchain in $goroot"
 put "$golicense" go.txt
-modules=$("$go" list -deps -f '{{with .Module}}{{if not .Main}}{{.Path}}{{end}}{{end}}' ./server/cmd/pdp11d | sort -u)
+# -buildvcs=false: no git call into this checkout, which git refuses when it
+# belongs to another user than the one running this script (install.sh as
+# root on a user's clone): "error obtaining VCS status: exit status 128".
+modules=$("$go" list -buildvcs=false -deps -f '{{with .Module}}{{if not .Main}}{{.Path}}{{end}}{{end}}' ./server/cmd/pdp11d | sort -u)
 for m in $modules; do
 	dir=$("$go" list -m -f '{{.Dir}}' "$m")
 	lic=

@@ -169,6 +169,13 @@ up to a second of ticks at once, and SimH's catch-up holds 40 ticks/s for
 2-3 s to take it back; toggling every second adds these up (40 ticks/s for
 about 7 s after six switches).
 
+`sim_stop_timer_services` counted the head of the co-schedule queue twice
+(`cosched_interval` and its `time`, which equals it): every stop added up to
+twice a unit's wait to its `usecs_remaining`. Rare stops never show it. After
+600 speed switches 30 ms apart and 150 halts with steps the console poll waited
+46-64 s in 5 of 25 runs, while the clock kept ticking: a typed line was echoed a
+minute late. With the head counted once: 0 of 10 runs, at most 1.8 s.
+
 ### The PANEL device
 
 ```
@@ -319,7 +326,8 @@ python3 -I simh/test/run_tests.py [--bin simh/out/pdp11] [options] [pattern ...]
 | `--no-baseline` | no baseline: overhead attached vs detached only |
 | `--test-cache DIR` | catalog archives named by their sha256, as `pdp11d fetch --cache DIR` stores them (default `$PDP11_TEST_CACHE`); the boot tests take the Unix V6 kit from it and are skipped without it |
 | `--quick` | skip performance, boot, timer and the libedit build |
-| `--rounds N` | benchmark rounds (default 7, at least 4) |
+| `--no-libedit-build` | skip only the libedit build |
+| `--rounds N` | overhead test: processes of each simulator per measurement (default 14, at least 4) |
 | `--work DIR`, `--keep` | keep the work directory (simulator transcripts, shm files) |
 | `pattern` | run tests whose id contains it (`test_panel`, `test_halt`, ...) |
 
@@ -334,9 +342,9 @@ every program against SimH's own disassembler (`EXAMINE -M`).
 | build | prompt on a pipe; PANEL commands and ATTACH errors (FIFO, symlink, directory, a file open to the group, second simulator); layout of the header vs `test/simtest/panel.py` (host C compiler, `-std=c11` with the static asserts and `-std=gnu99`); libedit: built against the host's `libedit.so.2` when no `libedit-dev` is installed: prompt on a pipe, line editing (history recall) on a pty |
 | asm | assembler vs `EXAMINE -M` |
 | panel | header/registers after ATTACH; ring advances only while running; weights = wall time (busy, idle); throttled weights (the heaviest 2 % of the samples, frame-to-frame duty vs unthrottled); WAIT samples with idle on, throttled, and in user mode with 22-bit mapping and D space (PA vs VA, mode/MMU/M22/D-space flags, rebuilt fetches, current-mode `pc_pa`); mode of MTPI writes and RTI pops; FP11 store addresses; live SR within 10 ms; halt request busy (≤ 25 ms, 20 runs) and idling (≤ 1 tick); `cont` + immediate request (20/20 ≤ 25 ms); cancel protocol (deterministic, negative control, 40 random races); halt transparent to T-bit tracing; `trap_count` (odd address, NXM); `SET PANEL REFRESH` after DEPOSIT; DETACH/ATTACH (bridge words, counters, stale request, garbage file, another version); `stop_count`; exact `instr_count`; an abort every 4 instructions (rate, `instr_count`, halt); DISPLAY REGISTER accumulators; rate adaptation (50k, 10k, 200k); sample content (SOB loop, copy loop); identical end state attached/detached/baseline |
-| perf | overhead of the hooks (SOB loop, copy loop; baseline / detached / attached at 50 k/s, interleaved, all on one host CPU, on-CPU time of the simulator thread from schedstat); host CPU in a WAIT loop with `SET CPU IDLE=2` |
+| perf | overhead of the hooks (SOB loop, copy loop; baseline / detached / attached at 50 k/s, interleaved, a new process per round, all on one host CPU, on-CPU time of the simulator thread from schedstat; the median over the processes of the fastest of 2 runs of each; fails only if 3 measurements in a row exceed a limit, at least one of them with its control, the reference simulator measured a second time, within 3 %; with no such measurement the host is too busy and the test skips); host CPU in a WAIT loop with `SET CPU IDLE=2` |
 | boot | Unix V6 to `# `, `ls /`, `sync`, with and without PANEL; WAIT samples while V6 idles; idle host CPU. The kit is the catalog archive of `systems/unixv6/system.json` from the test cache (sha256 of the archive and of each image checked, images extracted into the work directory) |
-| timer | patch 0003, bare-metal programs, 60 nominal and at least 30 ticks/s required where the faults give 0-5: the idle clock after a burst (every 2 s window 1-9 s after it) when the guest idles before the first calibration and starts a second after the simulator (V5); authentic → fast (busy) → authentic; authentic (idle) → fast at the prompt → a burst one tick into a calibration second, and `IDLE_CYC_MS` not the throttled rate; fast → authentic one tick into a calibration second: the guest clock within 0.4 s, no throttle warning. About 55 s |
+| timer | patch 0003, bare-metal programs, 60 nominal and at least 30 ticks/s required where the faults give 0-5: the idle clock after a burst (every 2 s window 1-9 s after it) when the guest idles before the first calibration and starts a second after the simulator (V5); authentic → fast (busy) → authentic; authentic (idle) → fast at the prompt → a burst one tick into a calibration second, and `IDLE_CYC_MS` not the throttled rate; fast → authentic one tick into a calibration second: the guest clock within 0.4 s, no throttle warning; `SHOW QUEUE` at 300 stops: a stop adds nothing to the console poll's wait. About 65 s |
 
 ## Measured results
 

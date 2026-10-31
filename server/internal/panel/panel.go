@@ -94,24 +94,25 @@ type Panel struct {
 	saveReq chan struct{} // saver: persisted controls changed
 	srReq   chan struct{} // SR writer: switch register changed
 
-	mu        sync.Mutex
-	ctl       controls
-	holders   map[string]map[uint64]struct{} // momentary switch -> clients holding it
-	cons      console
-	consGen   uint64 // incremented when a stop or a power-on rewrites the console state
-	power     PowerStatus
-	stopSeq   uint64       // number of EvStop events seen
-	observed  api.RunState // state of the last EvState seen
-	lastStop  api.StopInfo // the most recent EvStop
-	evSignal  chan struct{}
-	queue     []*op
-	inflight  *op
-	powerOff  bool   // a pre-empting power-off is running
-	sideHalt  bool   // a Halt bypassing the queue is running
-	busyExtra string // ShutdownOS outside the worker
-	saveGen   uint64 // incremented on every change of a persisted control
-	runCtx    context.Context
-	bootWatch *bootWatch // boot-timeout warning (bootwatch.go)
+	mu         sync.Mutex
+	ctl        controls
+	holders    map[string]map[uint64]struct{} // momentary switch -> clients holding it
+	cons       console
+	consGen    uint64 // incremented when a stop or a power-on rewrites the console state
+	power      PowerStatus
+	stopSeq    uint64       // number of EvStop events seen
+	observed   api.RunState // state of the last EvState seen
+	lastStop   api.StopInfo // the most recent EvStop
+	evSignal   chan struct{}
+	queue      []*op
+	inflight   *op
+	powerOff   bool   // a pre-empting power-off is running
+	sideHalt   bool   // a Halt bypassing the queue is running
+	busyExtra  string // ShutdownOS outside the worker
+	bootAtExit bool   // a boot was in progress when Run ended (ShutdownOS waits for it)
+	saveGen    uint64 // incremented on every change of a persisted control
+	runCtx     context.Context
+	bootWatch  *bootWatch // boot-timeout warning (bootwatch.go)
 
 	saveMu   sync.Mutex // serializes writes of panel.json
 	savedGen uint64     // saveGen of the last successful write (guarded by saveMu)
@@ -209,6 +210,7 @@ func (p *Panel) Run(ctx context.Context) error {
 	cancel()
 	p.mu.Lock()
 	p.runCtx = context.Background() // a late key OFF still pulls the plug
+	p.bootAtExit = p.bootWatch != nil
 	p.dropBootWatchLocked()
 	p.mu.Unlock()
 	wg.Wait()

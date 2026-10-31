@@ -79,7 +79,7 @@ def main():
                     help="skip the performance, boot, timer and libedit build tests")
     ap.add_argument("--no-libedit-build", action="store_true",
                     help="skip building the libedit variant")
-    ap.add_argument("--rounds", type=int, default=7, help="benchmark rounds (default 7)")
+    ap.add_argument("--rounds", type=int, default=14, help="overhead benchmark: processes of each simulator (default 14)")
     ap.add_argument("patterns", nargs="*")
     a = ap.parse_args()
 

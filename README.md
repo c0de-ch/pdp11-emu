@@ -19,41 +19,57 @@ supervised by `pdp11d`, a single Go binary that also serves the UI. Any number
 of browsers can watch and operate the one machine at the same time, and the
 panel and the console can each have a window of their own.
 
-* [Quick start: Docker](#quick-start-docker)
-* [Install in a VM or LXC container](#install-in-a-vm-or-lxc-container) (and [Proxmox](docs/PROXMOX.md))
+* [Quick start: Docker](#quick-start-docker): `docker compose up -d` on any
+  Linux host or VM with Docker
+* [Install in a VM or LXC container](#install-in-a-vm-or-lxc-container):
+  `./install.sh` on Debian 12/13 or Ubuntu 22.04/24.04; on Proxmox VE an
+  unprivileged Debian 13 container ([docs/PROXMOX.md](docs/PROXMOX.md))
 * [Using it](#using-it): front panel, console, windows, systems, toggle-in tutorial, keys
 * [Configuration](#configuration)
-* [Security](#security) and [reverse proxies](#behind-a-reverse-proxy)
+* [Security](#security) (set a password before others can reach the port) and
+  [reverse proxies](#behind-a-reverse-proxy)
 * [Troubleshooting](#troubleshooting)
 * [Development](#development) and [architecture](#architecture)
 
 ## Quick start: Docker
 
-It needs Docker Engine 23 or newer with BuildKit (the buildx plugin) and
-Compose v2 (`docker compose`); the health check's 2-s start interval needs
-Engine 25. Debian 12's own packages (docker.io 20.10, docker-compose 1.29)
-are too old: install `docker-ce`, `docker-buildx-plugin` and
-`docker-compose-plugin` from Docker's repository there. Debian 13: `apt install
-docker.io docker-buildx docker-compose`; Ubuntu 22.04/24.04: `apt install
-docker.io docker-buildx docker-compose-v2` (without the buildx package,
-`docker build` falls back to the legacy builder, which rejects the
-Dockerfile).
+It needs Docker Engine 23 or newer with BuildKit (buildx) and Compose v2
+(`docker compose`); the Debian and Ubuntu packages are listed below.
 
 ```sh
-git clone <this repository> pdp11-emu && cd pdp11-emu
-cp .env.example .env          # optional: set PDP11_PASSWORD (and TZ) in .env
+git clone https://github.com/c0de-ch/pdp11-emu.git && cd pdp11-emu
+cp .env.example .env          # then set PDP11_PASSWORD (and TZ) in .env
 docker compose up -d          # builds the image pdp11emu:latest from the checkout
 ```
 
-Compose expands `$` in `.env`, also inside double quotes: write a password
-that contains `$` in single quotes (`PDP11_PASSWORD='pa$w0rd'`) or double
-every `$` (`pa$$w0rd`); unquoted, `PDP11_PASSWORD=$ecret` becomes an empty
-password, which turns authentication off.
-
-Open `http://<host>:8080/`. On an empty volume pdp11d installs 2.11BSD from the
+The first `up` builds the image (about a minute on a fast machine). Then open
+`http://<host>:8080/`. On an empty volume pdp11d installs 2.11BSD from the
 archive baked into the image (about 6 s), powers the machine on and boots
 (about 10 s): the console shows `login:`. Log in as **root** (no password). No
 click is needed; the panel lamps come alive while it boots.
+
+**Set `PDP11_PASSWORD`** unless nobody else can reach the host (the browser
+then asks for a login: any user name, that password; after a later change run
+`docker compose up -d` again). Without a password anyone who can open the page
+controls the machine, and Docker publishes port 8080 on every interface, past
+the host's firewall (ufw, firewalld). Or publish it on loopback only
+(`PDP11_HTTP_PORT=127.0.0.1:8080` in `.env`) behind a reverse proxy; see
+[Security](#security). Without a password, open the UI by IP address or
+`localhost`, or list the host name you use in `PDP11_HOSTS` in `.env`: any
+other name gets HTTP 421.
+
+Compose expands `$` in `.env`, also inside double quotes: write a password that
+contains `$` in single quotes (`PDP11_PASSWORD='pa$w0rd'`) or double every `$`
+(`pa$$w0rd`); unquoted, `PDP11_PASSWORD=$ecret` becomes an empty password,
+which turns authentication off.
+
+Docker versions: the health check's 2-s start interval needs Engine 25.
+Debian 12's own packages (docker.io 20.10, docker-compose 1.29) are too old:
+install `docker-ce`, `docker-buildx-plugin` and `docker-compose-plugin` from
+Docker's repository there. Debian 13: `apt install docker.io docker-buildx
+docker-compose`; Ubuntu 22.04/24.04: `apt install docker.io docker-buildx
+docker-compose-v2` (without the buildx package, `docker build` falls back to
+the legacy builder, which rejects the Dockerfile).
 
 `docker compose down` (or `stop`) shuts 2.11BSD down cleanly first (about 16 s;
 the image sets `PDP11_SHUTDOWN_ON_STOP=1` and compose.yaml allows 90 s), so the
@@ -79,6 +95,8 @@ docker run -d --name pdp11 -p 8080:8080 -v pdp11-data:/data \
     --stop-timeout 90 -e PDP11_PASSWORD=change-me pdp11emu:latest
 docker stop -t 90 pdp11       # the default 10 s is too short for a clean shutdown
 ```
+
+### The image
 
 | | |
 |---|---|
@@ -116,9 +134,14 @@ On Debian 12/13 or Ubuntu 22.04/24.04 (amd64 or arm64), in a VM or an
 unprivileged LXC container, as root (or with `sudo`):
 
 ```sh
-git clone <this repository> pdp11-emu && cd pdp11-emu
+apt-get update && apt-get install -y git      # if git is missing
+git clone https://github.com/c0de-ch/pdp11-emu.git && cd pdp11-emu
 ./install.sh                  # or: ./install.sh --port 8080 --prefetch all
 ```
+
+On **Proxmox VE**, [docs/PROXMOX.md](docs/PROXMOX.md) has the steps from creating
+the container on: an unprivileged Debian 13 container with 1 core, 512 MB and
+4 GB is enough.
 
 `install.sh` installs the build tools (`build-essential git ca-certificates`),
 uses the system's Go if it is new enough for `go.mod` or else downloads the
@@ -128,6 +151,13 @@ pdp11d from the checkout in a work directory under `/opt/pdp11` (not in
 default system's archive, creates the system user `pdp11` and enables and
 starts `pdp11d.service`, checks that it keeps running and prints the URL. It
 takes about a minute on a fast machine.
+
+**Set a password** unless only you can reach the machine: without one, anyone
+who can open the page controls it. Put `PDP11_PASSWORD=...` into
+`/etc/pdp11/pdp11d.env` and run `systemctl restart pdp11d` (see
+[Security](#security)).
+
+### What `install.sh` needs and installs
 
 It needs access to these hosts (HTTPS unless noted; the usual proxy
 variables such as `https_proxy` work, except for FTP):
@@ -174,9 +204,6 @@ The simulator needs the glibc of the machine it was built on or a newer one
 (`install.sh` checks): `make dist-docker DIST_PLATFORM=linux/amd64` and `make
 dist-arm64` build the binaries with the Dockerfile on Debian 13, which suits
 Debian 13 and Ubuntu 24.04.
-
-**Proxmox VE**: see [docs/PROXMOX.md](docs/PROXMOX.md); an unprivileged Debian
-13 container with 1 core, 512 MB and 4 GB is enough.
 
 ## Using it
 
@@ -262,10 +289,15 @@ V5-V7, 2.11BSD) install without questions. RT-11, RSX-11M-PLUS and RSTS/E are
 under the **Mentec PDP-11 hobbyist licence**: the UI shows the licence text and
 installs only after you accept it (or list the ids in `PDP11_ACCEPT_LICENSES`
 for unattended installs); they are never included in images built from this
-repository. "Factory reset" re-creates a system's disks from the archive.
+repository. "Factory reset" re-creates a system's disks from the archive; the
+old disks stay until the new ones are complete, so it needs the free space of a
+new install (2.11BSD: about 240 MB). A disk that went missing is restored from
+the archive at the next power-on, and the system's other disks stay as they are.
 Help → System shows the notes for the selected system: how to log in, things
 to try, how to shut down. [THIRD_PARTY.md](THIRD_PARTY.md) lists all sources
 and licences.
+
+### Extra terminal lines
 
 2.11BSD and RSX-11M-PLUS also have terminal lines (a DZ11 with eight lines)
 for more users at once, reachable over telnet: set `PDP11_TTY_TELNET=:4000`
@@ -309,7 +341,8 @@ a light that walks across the DATA lamps on the DISPLAY REGISTER:
 3. For each of the eight words: set SR to it and raise DEP (each DEP after the
    first steps the address by 2).
 4. SR to 001000, LOAD ADRS, ENABLE/HALT up (ENABLE), press START.
-5. Turn the DATA knob to DISPLAY REGISTER: a single light walks across DATA.
+5. Turn the DATA knob to DISPLAY REGISTER: a single light walks across DATA
+   (for the first 2-3 s the CPU runs flat out and all the lamps glow dimly).
 
 ### Keyboard shortcuts
 
@@ -320,8 +353,9 @@ knobs and the key):
 |---|---|
 | ← → (Home, End) | previous / next switch |
 | ↑ / ↓ | SR bit 1 / 0; raise DEP or LAMP TEST; press LOAD ADRS, EXAM, CONT, START; ENABLE/S INST up, HALT/S BUS down |
+| arrow keys on a knob or the key | turn it |
 | Space, Enter | toggle or press (hold) the focused switch |
-| 0 … 7 | shift an octal digit into the switch register; Backspace shifts right; Esc clears it |
+| 0 … 7 | shift an octal digit into the switch register; Backspace shifts right; Esc or Delete clears it |
 | L, E, D, C, S | LOAD ADRS, EXAM, DEP, CONT, START (hold) |
 | T | LAMP TEST (hold) |
 | H, B | toggle ENABLE/HALT, S INST/S BUS CYCLE |
@@ -344,12 +378,15 @@ a fast system idles in WAIT.
 
 ## Configuration
 
-pdp11d reads `PDP11_*` environment variables (Docker: `environment:` in
-compose.yaml, which takes `PDP11_PASSWORD`, `PDP11_HOSTS`,
-`PDP11_TRUSTED_PROXIES`, `PDP11_FRAME_ANCESTORS` and `TZ` from `.env`, or
-`docker run -e`; native installs: `/etc/pdp11/pdp11d.env`). `pdp11d serve`
-also takes each as a flag in lower-case-dash form (`--listen :9090`), which
-wins over the environment. An empty variable means its default.
+pdp11d reads `PDP11_*` environment variables. Docker: the `environment:`
+section of compose.yaml, which takes `PDP11_PASSWORD`, `PDP11_HOSTS`,
+`PDP11_TRUSTED_PROXIES`, `PDP11_FRAME_ANCESTORS` and `TZ` from `.env` (add
+any other setting to that section, e.g. `PDP11_ACCEPT_LICENSES: rt11`: a line
+in `.env` alone does not reach the container), or `docker run -e`;
+`PDP11_HTTP_PORT` and `PDP11_TTY_PORT` in `.env` are compose's host ports. Native
+installs: `/etc/pdp11/pdp11d.env`. `pdp11d serve` also takes each as a flag in
+lower-case-dash form (`--listen :9090`), which wins over the environment. An
+empty variable means its default.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -366,7 +403,7 @@ wins over the environment. An empty variable means its default.
 | `PDP11_ALLOW_ORIGINS` | empty | extra allowed WebSocket `Origin` hosts, comma list of patterns such as `pdp11.example.com` or `*.example.com:8443` |
 | `PDP11_HOSTS` | empty | while no password is set: host names (no ports) under which the UI may be opened, besides IP addresses, `localhost`, the machine's own name, the host name in `PDP11_LISTEN` and the `PDP11_ALLOW_ORIGINS` hosts; comma list, `*.example.com` matches every subdomain, `*` turns the check off ([Security](#security)) |
 | `PDP11_TRUSTED_PROXIES` | empty | reverse proxies (comma list of addresses or CIDRs) whose `X-Forwarded-For` is trusted: the failed-login limit and the log use the client's address |
-| `PDP11_FRAME_ANCESTORS` | `'self'` | pages that may show the UI in a frame: a CSP `frame-ancestors` source list, e.g. `'self' https://dashboard.example.com` (kiosk views) |
+| `PDP11_FRAME_ANCESTORS` | `'self'` | pages that may show the UI in a frame: a CSP `frame-ancestors` source list, e.g. `'self' https://dashboard.example.com` (kiosk views); `self` and `none` need their single quotes, without them pdp11d refuses to start |
 | `PDP11_HEALTH_PUBLIC` | `false` | answer `GET api/status` without the password |
 | `PDP11_PORT_BASE` | `23400` | localhost TCP port of the simulator's console |
 | `PDP11_SHM` | `/dev/shm/pdp11d-panel` (service: `/run/pdp11/panel`) | the panel export file shared with the simulator: a regular file of pdp11d's user with mode 0600 ([Troubleshooting](#troubleshooting)) |
@@ -375,8 +412,9 @@ wins over the environment. An empty variable means its default.
 | `PDP11_SYSTEMS` | (embedded) | a catalog directory that replaces the built-in one |
 | `PDP11_WEB` | (embedded) | serve the UI from this directory (development) |
 
-Paths and the telnet listener must not contain blanks, quotes or `;` (they
-are passed to SimH). Archives that cannot be downloaded can be dropped into
+`PDP11_DATA`, `PDP11_SHM` and the telnet listener must not contain blanks,
+quotes or `;` (they are passed to SimH). Archives that cannot be downloaded can
+be dropped into
 `$PDP11_DATA/import/`: any file whose size and sha256 match an archive of the
 catalog is moved into the cache.
 
@@ -392,8 +430,9 @@ native install uses the system's time zone (`timedatectl set-timezone
 Europe/Zurich`; a Proxmox container's: [docs/PROXMOX.md](docs/PROXMOX.md)) or
 `TZ=Europe/Zurich` in `/etc/pdp11/pdp11d.env`.
 
-`pdp11d` sub-commands: `serve` (default), `fetch [--cache DIR] [id...]`
-(download and verify archives; default: every redistributable system),
+`pdp11d` sub-commands: `serve` (default), `fetch [--cache DIR]
+[--accept-license] [id...]` (download and verify archives; default: every
+redistributable system; a hobbyist system needs `--accept-license`),
 `install [--accept-license] id...` (it refuses with exit status 2 while a
 pdp11d serves the same `PDP11_DATA`: stop the service, or install from the
 UI), `check [dir]` (validate a catalog),
@@ -459,8 +498,12 @@ cookie's path); send `X-Forwarded-Proto: https` so that the cookie is marked
 Secure. pdp11d pings every WebSocket every 20 s, so the usual 60 s proxy
 timeouts are fine. Set `PDP11_TRUSTED_PROXIES` to the proxy's address, so
 that the failed-login limit and the log take the client's address from
-`X-Forwarded-For`; without it every client counts as the proxy. Without a
-password, list the public host name in `PDP11_HOSTS`.
+`X-Forwarded-For`; without it every client counts as the proxy. That is the
+address pdp11d sees: with Docker and a proxy on the host it is the gateway of
+the container's network (`docker network inspect pdp11emu_default`, e.g.
+`172.18.0.1`), not `127.0.0.1`; with `PDP11_LOG=debug` the "client
+connected" lines name it (`remote=`). Without a password, list the public
+host name in `PDP11_HOSTS`.
 
 nginx, at `https://example.com/pdp11/`:
 
@@ -505,21 +548,34 @@ pdp11.example.com {
   (`PDP11_LISTEN`, `PDP11_PORT_BASE`), different `PDP11_SHM` files and
   different `PDP11_DATA` directories. One data directory (or Docker volume)
   serves one instance: a second pdp11d on it stops with "another pdp11d (pid
-  N) is using the data directory ...".
+  N) is using the data directory ..." (exit status 2; the unit does not restart
+  on that status: `systemctl start pdp11d` once the other one has stopped). One
+  `PDP11_SHM` file serves one simulator: the second power-on fails with "PANEL:
+  can't lock ...: in use by another simulator".
 * **"the host name ... is not allowed while no password is set"** (HTTP 421):
   open the UI by its IP address, add the name to `PDP11_HOSTS`, or set
   `PDP11_PASSWORD` ([Security](#security)).
 * **"origin not allowed"** (WebSocket refused behind a proxy): pass the `Host`
   header with its port (nginx: `$http_host`) or set `PDP11_ALLOW_ORIGINS`.
 * **Boot hangs**: if a system does not reach its prompt within its boot
-  timeout (30-90 s), every viewer gets a warning; check the console, then power
+  timeout (30-120 s), every viewer gets a warning; check the console, then power
   off and boot again.
 * **fsck after an unclean stop**: pulling the plug (or a stop timeout that is
   too short, e.g. `docker stop` without `-t 90`) leaves the guest's file
   systems unclean. 2.11BSD then repairs them with fsck at the next boot and
-  reboots itself (about 20 s extra); UNIX V5-V7 may lose recent writes. Use "Shut
+  reboots itself: 20-35 s longer (patch level 499: about 35 s), up to a minute
+  if the disks were being written, when files being written can also be lost
+  (`/lost+found`). At Authentic speed the repair takes 11-13 minutes and the
+  boot-timeout warning comes first: do not power off, switch to Fast until
+  `login:` appears (about a minute). UNIX V5-V7 may lose recent writes. Use "Shut
   down OS", `docker stop -t 90` or `systemctl stop pdp11d`. "Factory reset" in
   the system chooser restores a broken system's disks.
+* **A clean stop needs a prompt**: the script is typed on the console, so it works
+  at `login:` and at a root `#` prompt. With the console logged in as another
+  user, inside a program such as `vi` or with a half-typed login name it times out
+  after 30 s: "Shut down OS" then leaves the power on and says so, while a stop of
+  the container or the service powers off uncleanly (the log says "guest OS shutdown
+  incomplete"). Log out on the console first.
 * **Downloads fail**: the error names every URL tried. Download the archive by
   hand and drop it into `$PDP11_DATA/import/`, or build the image with
   `--build-context archives=DIR`.

@@ -132,6 +132,9 @@ func TestHealthCommand(t *testing.T) {
 	defer srv.Close()
 	env := envMap(map[string]string{"PDP11_LISTEN": strings.TrimPrefix(srv.URL, "http://"), "PDP11_PASSWORD": "s3cret"})
 	var out, errb bytes.Buffer
+	if code := run([]string{"health", "-h"}, env, &out, &errb); code != 0 {
+		t.Errorf("health -h: exit %d, want 0 like every sub-command", code)
+	}
 	if code := run([]string{"health"}, env, &out, &errb); code != 0 || !strings.Contains(out.String(), "run=running") || gotPass != "s3cret" {
 		t.Fatalf("health: %d %q %q (password %q)", code, out.String(), errb.String(), gotPass)
 	}

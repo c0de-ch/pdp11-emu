@@ -13,7 +13,7 @@ class Config:
     work = None             # work directory
     test_cache = None       # catalog archives named by their sha256 (PDP11_TEST_CACHE)
     quick = False           # skip the slow tests
-    rounds = 7              # benchmark rounds
+    rounds = 14             # overhead benchmark: processes of each simulator
     libedit_build = True    # build a libedit variant when the host allows it
 
 

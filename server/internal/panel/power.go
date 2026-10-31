@@ -98,6 +98,7 @@ var (
 	defaultStepTimeout = 30 * time.Second
 	haltAfterScript    = 30 * time.Second // the last step typed a command: wait for the OS to halt
 	settleAfterScript  = 3 * time.Second  // the script ended without a command (Unix V5-V7 sync)
+	readyBeforeScript  = 25 * time.Second // a boot in progress: wait for its prompt first
 )
 
 // answerDelay is the pause between an Expect match and the next Send: an
@@ -193,7 +194,22 @@ func (p *Panel) shutdown(o *op, powerOff bool) error {
 	pos := 0
 	res := waitMatched
 	answer := false // an Expect matched and nothing was typed since
+	// A boot the panel started is still in progress: the guest discards what
+	// is typed before its login prompt, so the script has to wait for it.
+	if p.bootInProgress() {
+		progress("step", 0, "Waiting for the system to finish booting…")
+		switch r := p.waitShutdown(o.ctx, readyBeforeScript, since, w, p.m.Ready); r {
+		case waitMatched:
+			answer = true // the prompt has just appeared
+		case waitTimeout:
+		default:
+			res = r
+		}
+	}
 	for i, s := range steps {
+		if res != waitMatched {
+			break
+		}
 		pct := 100 * float64(i) / total
 		if s.Expect != "" {
 			p.log.Debug("shutdown step", "system", id, "expect", s.Expect)
@@ -210,6 +226,7 @@ func (p *Panel) shutdown(o *op, powerOff bool) error {
 			})
 			if res != waitMatched {
 				if res == waitTimeout {
+					p.log.Warn("shutdown script: a prompt did not appear", "system", id, "expect", scriptText(s.Expect), "console", w.lastLine())
 					return fail(fmt.Sprintf("Shut down OS: “%s” did not appear on the console within %s.", scriptText(s.Expect), timeout))
 				}
 				break
@@ -406,6 +423,21 @@ func (w *consoleWatch) find(from int, s string) (int, bool) {
 		return 0, false
 	}
 	return w.base + i + j + len(s), true
+}
+
+// lastLine returns the end of the last line of output that has any text, for
+// the log when an expected prompt does not appear.
+func (w *consoleWatch) lastLine() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	b := bytes.TrimRight(w.buf, " \r\n")
+	if i := bytes.LastIndexAny(b, "\r\n"); i >= 0 {
+		b = b[i+1:]
+	}
+	if len(b) > 80 {
+		b = b[len(b)-80:]
+	}
+	return scriptText(string(b))
 }
 
 // end returns the position after the text seen so far.

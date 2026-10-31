@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -476,6 +477,73 @@ func TestInstalledRequiresFiles(t *testing.T) {
 	}
 }
 
+// A disk of an installed system went missing: the install that the next
+// power-on runs restores it and leaves the other disks, which hold the
+// user's data, alone. A factory reset replaces them.
+func TestInstallKeepsSurvivingDisks(t *testing.T) {
+	f := newFixture(t, defaultSpecs())
+	m := f.manager()
+	if err := m.Install(context.Background(), "tar", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(m.SystemDir("tar"), "Disks")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept string
+	for _, e := range entries {
+		if e.Name() != "b.dsk" {
+			kept = filepath.Join(dir, e.Name())
+		}
+	}
+	if kept == "" {
+		t.Fatal("the fixture needs a second disk")
+	}
+	if err := os.WriteFile(kept, []byte("written by the guest"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, "b.dsk"))
+	if err := m.Install(context.Background(), "tar", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Installed("tar") {
+		t.Fatal("not installed after the repair")
+	}
+	if got, _ := os.ReadFile(kept); string(got) != "written by the guest" {
+		t.Fatalf("the surviving disk was replaced: %.40q", got)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Fatalf("left over: %v", entries)
+	}
+	// A repair that fails half way keeps the marker: the next one still is a
+	// repair, not an install over the surviving disk.
+	missing := filepath.Join(dir, "b.dsk")
+	os.Remove(missing)
+	if err := os.MkdirAll(filepath.Join(missing, "x"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Install(context.Background(), "tar", false, ""); err == nil {
+		t.Fatal("Install renamed a file over a directory")
+	}
+	if !m.hasMarker("tar") || m.Installed("tar") {
+		t.Fatalf("after a failed repair: marker %v, installed %v", m.hasMarker("tar"), m.Installed("tar"))
+	}
+	if err := os.RemoveAll(missing); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Install(context.Background(), "tar", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(kept); string(got) != "written by the guest" {
+		t.Fatalf("the second repair replaced the surviving disk: %.40q", got)
+	}
+	if err := m.FactoryReset(context.Background(), "tar", ""); err != nil {
+		t.Fatal(err)
+	}
+	checkInstalled(t, f, m, "tar")
+}
+
 func TestFetch(t *testing.T) {
 	f := newFixture(t, defaultSpecs())
 	m := f.manager()
@@ -646,6 +714,34 @@ func TestFactoryResetAborted(t *testing.T) {
 	}
 }
 
+// TestRemoveStaleFiles: what a crash during a factory reset leaves goes away,
+// and only that: the images, the marker and a resumable download stay.
+func TestRemoveStaleFiles(t *testing.T) {
+	f := newFixture(t, defaultSpecs()[1:2]) // v6: two disks in a zip
+	m := f.manager()
+	if err := m.Install(context.Background(), "v6", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	dir := m.SystemDir("v6")
+	stale := []string{filepath.Join(dir, "unix0_v6_rk.dsk.part"), filepath.Join(m.cacheDir(), ".abc.copy-123")}
+	keep := filepath.Join(m.cacheDir(), "abc.part")
+	for _, p := range append(stale, keep) {
+		if err := os.WriteFile(p, []byte("x"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.RemoveStaleFiles()
+	for _, p := range stale {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s stays (%v)", p, err)
+		}
+	}
+	if _, err := os.Lstat(keep); err != nil {
+		t.Errorf("the partial download: %v", err)
+	}
+	checkInstalled(t, f, m, "v6")
+}
+
 // TestFactoryResetFreeSpace: the new images are extracted next to the old
 // ones, so a reset needs their whole size free; a refused reset leaves the
 // system as it was.
@@ -670,11 +766,92 @@ func TestFactoryResetFreeSpace(t *testing.T) {
 	if got, _ := os.ReadFile(disk); !m.Installed("v6") || string(got) != "guest data" {
 		t.Fatal("a refused reset changed the system")
 	}
+	// A file left by an interrupted attempt is overwritten: its blocks count as free.
+	part := disk + ".part"
+	if err := os.WriteFile(part, bytes.Repeat([]byte{1}, 64<<10), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(part)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freeSpaceOf = func(string) (int64, error) { return need - allocated(fi), nil }
+	if err := m.FactoryReset(context.Background(), "v6", ""); err != nil {
+		t.Fatalf("FactoryReset over a left-over .part: %v", err)
+	}
+	checkInstalled(t, f, m, "v6")
+	os.WriteFile(disk, []byte("guest data"), 0o640)
 	freeSpaceOf = func(string) (int64, error) { return need, nil }
 	if err := m.FactoryReset(context.Background(), "v6", ""); err != nil {
 		t.Fatal(err)
 	}
 	checkInstalled(t, f, m, "v6")
+}
+
+// TestCancelAfterTheLastExtract: a cancel that arrives when the last byte is
+// extracted still cancels: the old images stay.
+func TestCancelAfterTheLastExtract(t *testing.T) {
+	f := newFixture(t, defaultSpecs()[1:2]) // v6: two disks in a zip
+	m := f.manager()
+	if err := m.Install(context.Background(), "v6", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	disk := filepath.Join(m.SystemDir("v6"), "unix0_v6_rk.dsk")
+	if err := os.WriteFile(disk, []byte("guest data"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	m.SubscribeProgress(func(p api.Progress) {
+		if p.Task == "factoryReset" && p.Phase == "extract" && p.Total > 0 && p.Bytes == p.Total {
+			m.Cancel("v6")
+		}
+	})
+	if err := m.FactoryReset(context.Background(), "v6", ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FactoryReset: %v, want a cancel", err)
+	}
+	if got, _ := os.ReadFile(disk); !m.Installed("v6") || string(got) != "guest data" {
+		t.Fatal("the cancelled reset replaced the images")
+	}
+	if _, err := os.Lstat(disk + ".part"); !os.IsNotExist(err) {
+		t.Fatalf(".part left behind (%v)", err)
+	}
+}
+
+// TestCommitFailureLeavesNoMarker: images that were only partly replaced
+// must not look installed. The file of the second rename disappears after the
+// extraction, so the first image has been replaced when the commit fails.
+func TestCommitFailureLeavesNoMarker(t *testing.T) {
+	f := newFixture(t, defaultSpecs()[1:2]) // v6: two disks in a zip
+	m := f.manager()
+	if err := m.Install(context.Background(), "v6", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	dir := m.SystemDir("v6")
+	part := filepath.Join(dir, "unix1_v6_rk.dsk.part")
+	m.SubscribeProgress(func(p api.Progress) {
+		if p.Task == "factoryReset" && p.Phase == "extract" && p.Total > 0 && p.Bytes == p.Total {
+			os.Remove(part)
+		}
+	})
+	if err := m.FactoryReset(context.Background(), "v6", ""); err == nil {
+		t.Fatal("the commit went on without the file")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, markerName)); !os.IsNotExist(err) {
+		t.Fatalf("the marker survived a failed commit (%v)", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "unix0_v6_rk.dsk.part")); !os.IsNotExist(err) {
+		t.Fatalf(".part left behind (%v)", err)
+	}
+}
+
+// TestMain turns off the log of touched files that "go test" keeps for its test
+// cache: limitFileSize's limit applies to that file too, and a buffer flush
+// during a limit fails the whole run ("testing: can't write .../testlog.txt:
+// file too large"), which the length of $TMPDIR alone can bring about. The
+// results of this package are simply not cached.
+func TestMain(m *testing.M) {
+	flag.Parse()
+	_ = flag.Set("test.testlogfile", "")
+	os.Exit(m.Run())
 }
 
 // limitFileSize makes writes beyond n bytes fail (EFBIG, as ENOSPC would

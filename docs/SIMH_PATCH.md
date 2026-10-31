@@ -39,7 +39,9 @@ tables: `simh/README.md`.
      a second, and authentic after a fast boot prints a bogus "Host CPU could
      be too slow" warning.) After a switch to fast the first calibration
      second still ends within milliseconds: the guest gets up to a second of
-     ticks at once, which SimH's catch-up takes back within about 3 s.
+     ticks at once, which SimH's catch-up takes back within about 3 s. A stop
+     no longer counts the head of the co-schedule queue twice (with a stop every
+     few ticks the console poll's wait grew to a minute).
 4. `simh/panel/pdp11_panel.c`, `pdp11_panel.h`: the `PANEL` device and the
    hook functions; copied into `PDP11/` by `build.sh`, not part of a patch.
 5. `simh/panel/pdp11_panel_shm.h`: the canonical shared-memory layout and
@@ -309,8 +311,8 @@ used).
 ## 7. Tests (`simh/test/`, Python 3 stdlib, `python3 -I`)
 
 `python3 -I simh/test/run_tests.py [--bin simh/out/pdp11] [--quick]
-[--baseline-bin PATH | --no-baseline] [--test-cache DIR] [--rounds N]
-[--work DIR --keep] [pattern...]`. Simulators are driven like pdp11d (SCP on
+[--baseline-bin PATH | --no-baseline] [--test-cache DIR] [--no-libedit-build]
+[--rounds N] [--work DIR --keep] [pattern...]`. Simulators are driven like pdp11d (SCP on
 pipes, console on localhost TCP, export mapped). Groups:
 
 * **build**: prompt on a pipe (and with the host's libedit); PANEL commands and
@@ -339,8 +341,12 @@ pipes, console on localhost TCP, export mapped). Groups:
   executed, within 10 % after `STEP 3000000`, halt within 25 ms); the
   DISPLAY REGISTER accumulators (a 25 %/75 % duty within 3 points); rate
   adaptation (50k, 10k, 200k); identical end state attached/detached/unpatched.
-* **perf**: hook overhead (SOB loop and memory-copy loop, median of ≥ 4 rounds of
-  on-CPU time, baseline/detached/attached interleaved) and host CPU in a WAIT
+* **perf**: hook overhead (SOB loop and memory-copy loop, on-CPU time,
+  baseline/detached/attached interleaved, a new process per round: the median
+  over ≥ 4 processes of the fastest of 2 runs of each; a failure needs 3
+  measurements in a row over a limit, at least one of them with its control,
+  the reference simulator measured a second time, within 3 %; with no such
+  measurement the host is too busy and the test skips) and host CPU in a WAIT
   loop (`SET CPU IDLE=2`, PANEL attached).
 * **boot**: Unix V6 to the prompt, with and without PANEL. The kit is the
   catalog's archive (`systems/unixv6/system.json`) from `$PDP11_TEST_CACHE`
@@ -355,8 +361,9 @@ pipes, console on localhost TCP, export mapped). Groups:
   `cont`): authentic → fast (busy) → authentic; authentic (idle) → fast at
   the prompt → a burst one tick into a calibration second (and
   `sim_idle_cyc_ms` not the throttled rate); fast → authentic one tick into a
-  calibration second (the guest loses no time, no throttle warning). At least
-  30 of 60 ticks/s where the bugs give 0-5; about 55 s.
+  calibration second (the guest loses no time, no throttle warning); `SHOW
+  QUEUE` at 300 stops (a stop adds nothing to the console poll's wait). At least
+  30 of 60 ticks/s where the bugs give 0-5; about 65 s.
 
 Acceptance criteria, and the Phase A results (QEMU VM, 16 vCPUs at 2.1 GHz,
 GCC 15.2, other builds running; two complete runs, 30/30 tests). Rows and

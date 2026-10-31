@@ -98,6 +98,9 @@ class App extends Emitter {
       // the ready banner gives way to the first key typed and keeps clear of the cursor
       this.console.onTyped = () => this.ready.hide();
       this.console.onCursorMove = () => this.ready.placeSoon();
+      // a console that cannot keep up drops its backlog and reconnects: the
+      // server replays its history instead (PROTOCOL §1)
+      this.console.onBacklog = () => this.conn?.reconnect('console backlog');
       tasks.push(this.console.init().then(() => this.buildConsoleHead()));
     }
     const results = await Promise.allSettled(tasks);
@@ -111,7 +114,13 @@ class App extends Emitter {
     this.applyPrefs();
     this.prefs.on('change', (k) => this.onPref(k));
 
-    document.querySelectorAll('[data-bring-back]').forEach((b) => b.addEventListener('click', () => this.popouts.bringBack(b.dataset.bringBack)));
+    document.querySelectorAll('[data-bring-back]').forEach((b) => b.addEventListener('click', (e) => {
+      const view = b.dataset.bringBack;
+      this.popouts.bringBack(view);
+      // the button is gone: from the keyboard (detail 0) the focus goes to the view
+      // that came back; a mouse click on the panel's leaves typing in the console
+      (view === 'console' || !e.detail ? this[view] : this.console)?.focus();
+    }));
     if (VIEW === 'main') this.popouts.startMain();
     else if (window.name === `pdp11-${VIEW}` || window.opener) this.popouts.startPopout(VIEW);
 
@@ -220,7 +229,8 @@ class App extends Emitter {
     if (prev && st.ready && !prev.ready) this.showReadyBanner(false);
     if (!st.ready && prev?.ready) this.ready.hide();
     this.checkNeedsInstall();
-    if (st.run === 'error' && st.error && st.error !== this.lastError) {
+    // a failed install was just reported by its progress message: not twice
+    if (st.run === 'error' && st.error && st.error !== this.lastError && !(this.progressError && st.error.includes(this.progressError))) {
       // the simulator's own output usually says what went wrong
       this.toasts.show(st.error, 'error', { action: { label: 'Simulator log', onClick: () => this.openHelp('log') } });
     }
@@ -263,8 +273,12 @@ class App extends Emitter {
     this.progress.set(key, p);
     const sys = this.systems?.list?.find((s) => s.id === p.id);
     if (p.task === 'shutdown') this.shutdownProgress(p, sys);
-    else if (p.phase === 'error') this.toast(progressText(p, sys), 'error');
-    else if (p.phase === 'done' && !this.firstRun.isShown()) this.toast(progressText(p, sys), 'info');
+    else if (p.phase === 'error') {
+      this.progressError = p.text ?? '';
+      this.toast(progressText(p, sys), 'error');
+    }
+    // the first-run overlay says when an install is done; a factory reset gets its toast
+    else if (p.phase === 'done' && (p.task !== 'install' || !this.firstRun.isShown())) this.toast(progressText(p, sys), 'info');
     if (['done', 'error', 'cancelled'].includes(p.phase)) {
       setTimeout(() => {
         if (this.progress.get(key) === p) {
@@ -450,6 +464,12 @@ class App extends Emitter {
   async boot() {
     const st = this.state;
     if (!st) return;
+    // the licence was declined: the server cannot start the system, so ask again
+    const missing = this.systems?.list?.find((x) => x.id === st.needsInstall?.id);
+    if (missing && !missing.installed && !missing.installing) {
+      installDialog(this, missing);
+      return;
+    }
     if (st.run === 'running' || osInMemory(st)) {
       const v = await this.confirmStop('Reboot');
       if (v === 'cancel') return;

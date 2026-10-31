@@ -2,11 +2,22 @@ package atomicfile
 
 import (
 	"bytes"
+	"flag"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
 )
+
+// TestMain turns off the log of touched files that "go test" keeps for its test
+// cache: limitFileSize's limit applies to that file too, and a buffer flush
+// during a limit fails the whole run ("testing: can't write .../testlog.txt:
+// file too large"). The results of this package are simply not cached.
+func TestMain(m *testing.M) {
+	flag.Parse()
+	_ = flag.Set("test.testlogfile", "")
+	os.Exit(m.Run())
+}
 
 // limitFileSize makes writes beyond n bytes fail (EFBIG, as ENOSPC would
 // on a full disk) until the test ends. Go ignores SIGXFSZ.

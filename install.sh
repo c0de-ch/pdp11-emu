@@ -148,7 +148,7 @@ stop_manual() {
 	local pids pid i
 	pids=$(pdp11d_pids)
 	[ -n "$pids" ] || return 0
-	log "stopping pdp11d (pid $(echo $pids)); the guest OS is shut down first"
+	log "stopping pdp11d (pid ${pids//$'\n'/ }); the guest OS is shut down first"
 	for pid in $pids; do kill -TERM "$pid" 2>/dev/null || true; done
 	for ((i = 0; i < 90; i++)); do
 		[ -n "$(pdp11d_pids)" ] || return 0
@@ -316,7 +316,8 @@ else
 	# pdp11d downloads over HTTPS at run time (gzip, the other runtime tool,
 	# is an essential package).
 	if ! dpkg-query -W -f '${Status}' ca-certificates 2>/dev/null | grep -q 'ok installed'; then
-		apt_install ca-certificates
+		apt_install ca-certificates ||
+			warn "could not install ca-certificates: pdp11d cannot download further systems over HTTPS (offline: --archives, or \$PDP11_DATA/import)"
 	fi
 	src=$here/bin
 	licenses=$here/licenses
@@ -365,8 +366,11 @@ if [ ! -e "$ENV_FILE" ]; then
 	log "wrote $ENV_FILE"
 fi
 if [ -n "$port" ]; then
-	# Replace the first PDP11_LISTEN line (also a commented one), else append.
-	if grep -qE '^[#[:space:]]*PDP11_LISTEN=' "$ENV_FILE"; then
+	# Replace every active PDP11_LISTEN line (the last one wins), else the first
+	# commented one, else append.
+	if grep -qE '^[[:space:]]*PDP11_LISTEN=' "$ENV_FILE"; then
+		sed -i -E "s/^[[:space:]]*PDP11_LISTEN=.*/PDP11_LISTEN=:$port/" "$ENV_FILE"
+	elif grep -qE '^[#[:space:]]*PDP11_LISTEN=' "$ENV_FILE"; then
 		sed -i -E "0,/^[#[:space:]]*PDP11_LISTEN=.*/s//PDP11_LISTEN=:$port/" "$ENV_FILE"
 	else
 		printf '\nPDP11_LISTEN=:%s\n' "$port" >>"$ENV_FILE"

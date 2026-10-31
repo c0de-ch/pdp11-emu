@@ -115,7 +115,7 @@ func settings() []setting {
 		{"PDP11_LISTEN", "listen", ":8080", "HTTP listen address", str(func(c *config) *string { return &c.Listen })},
 		{"PDP11_DATA", "data", defaultDataDir(), "data directory", str(func(c *config) *string { return &c.Data })},
 		{"PDP11_SIMH", "simh", "/opt/pdp11/bin/pdp11", "patched simulator binary", str(func(c *config) *string { return &c.SIMH })},
-		{"PDP11_CACHE", "cache", "/opt/pdp11/cache", "read-only archive cache searched before downloading", str(func(c *config) *string { return &c.Cache })},
+		{"PDP11_CACHE", "cache", "/opt/pdp11/cache", "read-only archive caches searched before downloading (several: separated by ':')", str(func(c *config) *string { return &c.Cache })},
 		{"PDP11_SYSTEMS", "systems", "", "catalog directory that replaces the embedded catalog", str(func(c *config) *string { return &c.Systems })},
 		{"PDP11_WEB", "web", "", "serve the UI from this directory (development)", str(func(c *config) *string { return &c.Web })},
 		{"PDP11_PASSWORD", "password", "", "HTTP Basic auth password (empty: no authentication)", str(func(c *config) *string { return &c.Password })},

@@ -21,6 +21,16 @@ const STATE_LAG = 500;
 // what it has queued, so a reset (reconnect) waits for this much at most and
 // everything behind it is dropped instead of being replayed ahead of the history.
 const WRITE_AHEAD = 65536;
+// Console output waiting in the browser beyond this (a client that cannot keep
+// up, e.g. a hidden tab under an output flood) is dropped and onBacklog asks
+// for the server's history instead, as the server disconnects a client that
+// falls this far behind (PROTOCOL §1). Without it the queue would grow without
+// bound: xterm.js's own 50 MB cap never applies behind WRITE_AHEAD.
+const MAX_BACKLOG = 4 << 20;
+// Output waiting in the browser is merged into blocks of this size: SimH sends a few
+// bytes per message, up to 20000 messages a second, and one queue entry per
+// message costs far more memory than the bytes, and Array.shift() gets slow.
+const OUT_BLOCK = 4096;
 
 export const SEND_KEYS = [
   ['^C', '\x03'], ['^O', '\x0f'], ['^Q', '\x11'], ['^S', '\x13'], ['^T', '\x14'], ['^U', '\x15'], ['^W', '\x17'], ['^Z', '\x1a'],
@@ -102,6 +112,8 @@ export class ConsoleView {
     this.historyExpected = false; // the next console message is the history
     this.out = []; // console output not handed to xterm.js yet: {bytes, done?} or {reset: true}
     this.inFlight = 0; // bytes handed to xterm.js whose write callback has not run
+    this.queued = 0; // bytes in this.out
+    this.overflowed = false; // backlog dropped, waiting for the history
     this.paste = null; // { bytes, offset } of a paced paste: what is not sent yet
     this.pasteQueued = 0; // estimate of this client's paste bytes still in the server's queue
     this.pasteSends = []; // [time, bytes] of the paste chunks sent within STATE_LAG
@@ -202,6 +214,8 @@ export class ConsoleView {
     // closed does not wait for the safety timeout
     for (const o of this.out) o.done?.();
     this.out = [{ reset: true }];
+    this.queued = 0;
+    this.overflowed = false;
     this.historyExpected = true;
     this.drain();
   }
@@ -217,8 +231,11 @@ export class ConsoleView {
   write(bytes) {
     if (!this.term) return;
     if (!this.historyExpected) {
-      this.out.push({ bytes });
-      this.drain();
+      if (this.overflowed) return; // the history follows
+      this.queue(bytes);
+      this.queued += bytes.length;
+      if (this.queued > MAX_BACKLOG) this.dropBacklog();
+      else this.drain();
       return;
     }
     this.historyExpected = false;
@@ -236,7 +253,32 @@ export class ConsoleView {
     // never keep the console closed for good
     const safety = setTimeout(opened, 15000);
     this.out.push({ bytes, done: opened });
+    this.queued += bytes.length;
     this.drain();
+  }
+
+  /** Appends live output to the queue, merged with the output already waiting behind the first entry. */
+  queue(bytes) {
+    const last = this.out.length > 1 ? this.out[this.out.length - 1] : null;
+    if (last?.block && last.used + bytes.length <= OUT_BLOCK) {
+      last.block.set(bytes, last.used);
+      last.used += bytes.length;
+    } else if (this.out.length && bytes.length < OUT_BLOCK) {
+      const block = new Uint8Array(OUT_BLOCK);
+      block.set(bytes);
+      this.out.push({ block, used: bytes.length });
+    } else {
+      this.out.push({ bytes });
+    }
+  }
+
+  /** Too far behind: drops the queued output; onBacklog reconnects, and the history replaces it. */
+  dropBacklog() {
+    for (const o of this.out) o.done?.();
+    this.out = [];
+    this.queued = 0;
+    this.overflowed = !!this.onBacklog;
+    this.onBacklog?.();
   }
 
   /**
@@ -253,11 +295,13 @@ export class ConsoleView {
         this.term.reset();
         continue;
       }
-      if (this.inFlight && this.inFlight + next.bytes.length > WRITE_AHEAD) return;
+      const bytes = next.block ? next.block.subarray(0, next.used) : next.bytes;
+      if (this.inFlight && this.inFlight + bytes.length > WRITE_AHEAD) return;
       this.out.shift();
-      const n = next.bytes.length;
+      const n = bytes.length;
+      this.queued -= n;
       this.inFlight += n;
-      this.term.write(next.bytes, () => {
+      this.term.write(bytes, () => {
         this.inFlight -= n;
         next.done?.();
         this.drain();
@@ -369,6 +413,9 @@ export class ConsoleView {
     // Shift+Tab leaves the console (the browser moves the focus back); Tab
     // itself goes to the PDP-11, whose terminals had no back-tab
     if (k === 'Tab' && ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey) return false;
+    // F6 stays the browser's: it moves the focus to the address bar (xterm.js
+    // would cancel it and send ESC [ 17 ~ to the guest)
+    if (k === 'F6' && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey) return false;
     if (this.prefs.get('authenticKeys')) return true;
     // Backspace with any modifier, and Delete, erase like the system expects:
     // xterm.js would send DEL (the Unix V5-V7 interrupt), ESC DEL, BS or ESC [3~
@@ -507,13 +554,14 @@ export class ConsoleView {
     ev.preventDefault();
     this.menu?.remove();
     const sel = this.term?.getSelection() ?? '';
-    const close = () => {
+    const close = (refocus = true) => {
       this.menu?.remove();
       this.menu = null;
       document.removeEventListener('pointerdown', outside, true);
       document.removeEventListener('keydown', onEsc, true);
+      if (refocus) this.term?.focus(); // typing, and Ctrl+Shift+C after "Select all", go on working
     };
-    const outside = (e) => { if (!this.menu?.contains(e.target)) close(); };
+    const outside = (e) => { if (!this.menu?.contains(e.target)) close(false); };
     const onEsc = (e) => { if (e.key === 'Escape') close(); };
     const item = (label, fn, disabled = false) => h('button', {
       type: 'button', role: 'menuitem', class: 'menu-item', disabled,
@@ -530,12 +578,24 @@ export class ConsoleView {
     );
     document.body.append(menu);
     const r = menu.getBoundingClientRect();
-    menu.style.left = `${Math.min(ev.clientX, innerWidth - r.width - 4)}px`;
-    menu.style.top = `${Math.min(ev.clientY, innerHeight - r.height - 4)}px`;
+    menu.style.left = `${Math.max(4, Math.min(ev.clientX, innerWidth - r.width - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(ev.clientY, innerHeight - r.height - 4))}px`;
     this.menu = menu;
+    document.addEventListener('keydown', onEsc, true);
+    // not for the click that opened it
     setTimeout(() => {
-      document.addEventListener('pointerdown', outside, true);
-      document.addEventListener('keydown', onEsc, true);
+      if (this.menu === menu) document.addEventListener('pointerdown', outside, true);
+    });
+    menu.addEventListener('keydown', (e) => {
+      const btns = [...menu.querySelectorAll('.menu-item:not([disabled])')];
+      const i = btns.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown') btns[(i + 1) % btns.length]?.focus();
+      else if (e.key === 'ArrowUp') btns[(i - 1 + btns.length) % btns.length]?.focus();
+      else if (e.key === 'Home') btns[0]?.focus();
+      else if (e.key === 'End') btns.at(-1)?.focus();
+      else if (e.key === 'Tab') close();
+      else return;
+      e.preventDefault();
     });
     menu.querySelector('button:not([disabled])')?.focus();
   }

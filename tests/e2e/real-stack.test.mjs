@@ -24,7 +24,7 @@ import { REPO, settings, skip } from './lib/env.mjs';
 import { Daemon, buildDaemon } from './lib/daemon.mjs';
 import {
   LAMP, browser, clickKey, clickPaddle, closeBrowser, consoleLines, consoleText, lampBits, lastFrame, openPage,
-  outputOf, point, pressPaddle, shot, sleep, state, typeLine, typeSR, waitConsole, waitFor, waitPrompt, waitState, watchCSP, watchErrors,
+  outputIn, outputOf, point, pressPaddle, shot, sleep, state, typeLine, typeSR, waitConsole, waitFor, waitPrompt, waitState, watchCSP, watchErrors,
 } from './lib/ui.mjs';
 
 // UI.md §6 (R7): the light chaser at 001000
@@ -143,8 +143,10 @@ describe('real stack: pdp11d + SimH + web UI in Chromium', { skip }, () => {
     mark('loginToPromptMs', Date.now() - login);
     await typeLine(page, 'ls /');
     const out = await waitFor(async () => {
-      const o = await outputOf(page, 'ls /');
-      return o && (await consoleLines(page)).filter((l) => l.trim()).at(-1).trimEnd() === '#' ? o : null;
+      // one reading: with two, the output can arrive between them
+      const lines = await consoleLines(page);
+      const o = outputIn(lines, 'ls /');
+      return o && lines.filter((l) => l.trim()).at(-1).trimEnd() === '#' ? o : null;
     }, { timeout: 30000, message: 'ls / output' });
     const words = out.join(' ').split(/\s+/);
     assert.ok(words.includes('bin') && words.includes('etc'), `ls / lists bin and etc: ${JSON.stringify(out)}`);
@@ -233,8 +235,23 @@ describe('real stack: pdp11d + SimH + web UI in Chromium', { skip }, () => {
     mark('autoToggleMs', Date.now() - auto);
     await waitFor(() => page.evaluate(() => document.querySelectorAll('.tutorial li.done').length === 5), { timeout: 5000, message: 'all tutorial steps done' });
     assert.ok((await page.evaluate(() => window.pdp11Debug.sent.filter((e) => e.msg?.type === 'momentary' && e.msg.name === 'DEP' && e.msg.active).length)) >= 8, 'DEP raised for every word');
-    // SimH calibrates its throttle during the first second of running
-    await sleep(2000);
+    // SimH throttles only after its clock has calibrated for THROT_DELAY (3) seconds:
+    // about 2.3-3 s after START the CPU still runs flat out and every DATA lamp glows
+    // dimly at once. Wait for the end of that phase: 15 frames in a row with at most 3 lamps on
+    await page.evaluate(() => new Promise((resolve, reject) => {
+      let calm = 0;
+      const off = window.pdp11Debug.app.conn.on('frame', (lamps) => {
+        let on = 0;
+        for (let i = 0; i < 16; i++) if (lamps[22 + i] > 0) on++;
+        calm = on <= 3 ? calm + 1 : 0;
+        if (calm >= 15) {
+          clearTimeout(timer);
+          off();
+          resolve();
+        }
+      });
+      const timer = setTimeout(() => { off(); reject(new Error('the light never settled: is the CPU throttled?')); }, 20000);
+    }));
     // the DISPLAY REGISTER on the DATA lamps, frame by frame
     const rec = await page.evaluate((ms) => new Promise((resolve) => {
       const out = [];

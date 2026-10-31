@@ -337,9 +337,12 @@ func shell(e *env, haltAfter time.Duration) {
 }
 
 func shortShutdown(t *testing.T) {
-	old := [3]time.Duration{defaultStepTimeout, haltAfterScript, settleAfterScript}
+	old := [4]time.Duration{defaultStepTimeout, haltAfterScript, settleAfterScript, readyBeforeScript}
 	defaultStepTimeout, haltAfterScript, settleAfterScript = time.Second, 300*time.Millisecond, 100*time.Millisecond
-	t.Cleanup(func() { defaultStepTimeout, haltAfterScript, settleAfterScript = old[0], old[1], old[2] })
+	readyBeforeScript = 0
+	t.Cleanup(func() {
+		defaultStepTimeout, haltAfterScript, settleAfterScript, readyBeforeScript = old[0], old[1], old[2], old[3]
+	})
 }
 
 func phases(pr []api.Progress) []string {
@@ -383,6 +386,7 @@ func TestShutdownOS(t *testing.T) {
 	t.Run("progress texts are readable", func(t *testing.T) {
 		shortShutdown(t)
 		e := runningEnv(t)
+		e.m.SetReady(true) // no boot in progress: no step for it
 		e.sys.SetScript("bsd211", []api.ScriptStep{{Send: "sync\r"}, {Expect: "# ", Send: "\r"}, {Expect: "# ", Send: "shutdown -h now\r"}})
 		shell(e, 50*time.Millisecond)
 		e.do("shutdown")
@@ -524,6 +528,101 @@ func TestShutdownOS(t *testing.T) {
 		}
 		if h := e.input(api.PanelInput{Kind: "boot"}); !strings.Contains(h, "shutdown is already in progress") {
 			t.Fatalf("boot during shutdown: hint %q", h)
+		}
+	})
+}
+
+// A prompt that does not appear: the log says what the console showed, in the
+// same readable form as the step texts.
+func TestShutdownTimeoutLogsTheConsole(t *testing.T) {
+	shortShutdown(t)
+	var logged strings.Builder
+	e := runningEnv(t, withOptions(Options{FrameHz: 200, Autostart: true, Logger: newTestLogger(&logged)}))
+	e.m.SetReady(true)
+	e.sys.SetScript("bsd211", []api.ScriptStep{{Expect: "never", TimeoutSec: 1}})
+	e.input(api.PanelInput{Kind: "shutdownOS"})
+	if !paneltest.WaitFor(5*time.Second, func() bool { return e.m.Stream().Subscribers() > 0 }) {
+		t.Fatal("the shutdown did not start")
+	}
+	e.m.Stream().EmitString("first line\r\n\x1b[7mvi: file.txt\x1b[0m\r\n")
+	e.idle()
+	e.stop()
+	if got := logged.String(); !strings.Contains(got, "shutdown script: a prompt did not appear") ||
+		!strings.Contains(got, `expect=never`) || !strings.Contains(got, `console="^[[7mvi: file.txt^[[0m"`) {
+		t.Fatalf("log: %s", got)
+	}
+}
+
+// A stop during a boot the panel started: what is typed before the login
+// prompt is lost, so the script waits for the system to be ready.
+func TestShutdownWaitsForBoot(t *testing.T) {
+	t.Run("the script starts when the system is ready", func(t *testing.T) {
+		shortShutdown(t)
+		readyBeforeScript = 10 * time.Second
+		e := runningEnv(t) // booting: boot watch armed, not ready
+		shell(e, 20*time.Millisecond)
+		e.input(api.PanelInput{Kind: "shutdownOS"})
+		time.Sleep(200 * time.Millisecond)
+		if got := e.m.Stream().Input(); len(got) != 0 {
+			t.Fatalf("typed %q during the boot", got)
+		}
+		e.m.SetReady(true)
+		e.idle()
+		if got := string(e.m.Stream().Input()); got != "sync\rshutdown -h now\r" {
+			t.Fatalf("typed %q", got)
+		}
+	})
+	t.Run("the daemon's stop: Run has ended, the script still waits", func(t *testing.T) {
+		shortShutdown(t)
+		readyBeforeScript = 10 * time.Second
+		e := runningEnv(t)
+		shell(e, 20*time.Millisecond)
+		e.stop()
+		done := make(chan error, 1)
+		go func() { done <- e.p.ShutdownOS(context.Background()) }()
+		time.Sleep(200 * time.Millisecond)
+		if got := e.m.Stream().Input(); len(got) != 0 {
+			t.Fatalf("typed %q during the boot", got)
+		}
+		e.m.SetReady(true)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("ShutdownOS did not end")
+		}
+		if got := string(e.m.Stream().Input()); got != "sync\rshutdown -h now\r" {
+			t.Fatalf("typed %q", got)
+		}
+	})
+	t.Run("a boot that never gets ready: the script runs after the wait", func(t *testing.T) {
+		shortShutdown(t)
+		readyBeforeScript = 100 * time.Millisecond
+		e := runningEnv(t)
+		shell(e, 20*time.Millisecond)
+		e.input(api.PanelInput{Kind: "shutdownOS"})
+		e.idle()
+		if got := string(e.m.Stream().Input()); got != "sync\rshutdown -h now\r" {
+			t.Fatalf("typed %q", got)
+		}
+	})
+	t.Run("no boot in progress: no wait", func(t *testing.T) {
+		shortShutdown(t)
+		readyBeforeScript = time.Minute
+		e := runningEnv(t)
+		e.do("halt") // ends the watch; started by hand from here on
+		e.do("cont")
+		if bw, _ := e.watch(); bw != nil {
+			t.Fatal("watch after a halt")
+		}
+		shell(e, 20*time.Millisecond)
+		start := time.Now()
+		e.input(api.PanelInput{Kind: "shutdownOS"})
+		e.idle()
+		if d := time.Since(start); d > 5*time.Second {
+			t.Fatalf("took %s", d)
 		}
 	})
 }

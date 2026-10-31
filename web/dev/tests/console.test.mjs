@@ -157,6 +157,16 @@ describe('console', { skip }, () => {
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Send key ▾', 'the focus moved back');
     await sleep(200);
     assert.deepEqual(binary(srv).slice(n).map((r) => r.text), ['\t'], 'no back-tab sent');
+    // F6 is the browser's (the focus goes to the address bar): the page does not cancel it
+    await page.click('.console-screen');
+    await page.evaluate(() => {
+      window.addEventListener('keydown', (e) => { if (e.key === 'F6') window.f6Cancelled = e.defaultPrevented; }, { once: true });
+    });
+    const m = binary(srv).length;
+    await page.keyboard.press('F6');
+    await sleep(200);
+    assert.equal(await page.evaluate(() => window.f6Cancelled), false, 'F6 reached the browser');
+    assert.equal(binary(srv).length, m, 'F6 is not sent to the guest');
     // the console text for screen readers (xterm.js accessibility tree)
     assert.equal(await page.locator('.xterm-accessibility-tree').count(), 0);
     await page.evaluate(() => window.pdp11Debug.app.prefs.set('screenReader', true));
@@ -209,6 +219,18 @@ describe('console', { skip }, () => {
       await waitFor(() => srv.received.slice(n1).some((r) => r.client === ids[1] && /\x1b\[\?[\d;]*c/.test(r.text ?? '')), { message: 'b replied' });
       await sleep(400);
       assert.equal(srv.received.slice(n1).filter((r) => r.client === ids[0] && /\x1b\[/.test(r.text ?? '')).length, 0, 'page stayed silent');
+      // keys that look like terminal replies are still keys: the viewer that does not answer sends them
+      await sleep(1600); // page's "just typed" grace period is over
+      const nk = srv.received.length;
+      await page.click('.console-screen');
+      await page.keyboard.press('ArrowUp');
+      await page.keyboard.press('F5');
+      await waitFor(() => srv.received.slice(nk).some((r) => r.client === ids[0] && r.text === '\x1b[15~'), { message: 'cursor and function keys of a non-answerer' });
+      assert.ok(srv.received.slice(nk).some((r) => r.client === ids[0] && r.text === '\x1b[A'), 'ArrowUp sent');
+      await b.click('.console-screen');
+      await b.keyboard.type(' ');
+      await waitFor(() => b.evaluate((id) => window.pdp11Debug.state.console.answerer === id, ids[1]), { message: 'b is the answerer again' });
+      await sleep(1600);
       // DECRQSS and the colour queries follow the same rule, and a silent
       // viewer stays silent for the queries after them
       const n2 = srv.received.length;
@@ -309,6 +331,26 @@ describe('console', { skip }, () => {
     }
   });
 
+  test('the right-click menu: arrow keys move; closing it gives the focus back to the terminal', async () => {
+    const c = await openPage(srv, { width: 1600, height: 900 });
+    try {
+      const inTerminal = () => c.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'));
+      const box = await c.locator('.console-screen').boundingBox();
+      await c.mouse.click(box.x + 100, box.y + 100, { button: 'right' });
+      await c.waitForSelector('.context-menu');
+      const first = await c.evaluate(() => document.activeElement.textContent);
+      await c.keyboard.press('ArrowDown');
+      assert.notEqual(await c.evaluate(() => document.activeElement.textContent), first, 'ArrowDown moves');
+      await c.keyboard.press('Escape');
+      assert.ok(await inTerminal(), 'Esc: focus in the terminal');
+      await c.mouse.click(box.x + 100, box.y + 100, { button: 'right' });
+      await c.click('.context-menu button:has-text("Select all")');
+      assert.ok(await inTerminal(), 'Select all: focus in the terminal');
+    } finally {
+      await c.ctx.close();
+    }
+  });
+
   test('a reconnect drops the output xterm.js has not parsed yet: nothing old follows the reset', async () => {
     const c = await openPage(srv, { width: 1600, height: 900 });
     try {
@@ -317,12 +359,17 @@ describe('console', { skip }, () => {
         const enc = new TextEncoder();
         // the backlog of a slow client: far more than xterm.js parses at once
         for (let i = 0; i < 3000; i++) con.write(enc.encode(`OLD-${i} ${'o'.repeat(70)}\r\n`));
+        // flow control: xterm.js got at most 64 KiB of it, the rest waits in the browser
+        const backlog = { inFlight: con.inFlight, queued: con.out.length };
         con.beginHistory();
+        const afterReset = con.out.length; // only the reset is left of what waited
         con.write(enc.encode('HISTORY-START\r\nthe history\r\n'));
         for (let i = 0; i < 1500 && !window.pdp11Debug.consoleText().includes('the history'); i++) await new Promise((res) => setTimeout(res, 20));
         const t = window.pdp11Debug.consoleText();
-        return { old: (t.match(/OLD-/g) ?? []).length, first: t.split('\n')[0] };
+        return { backlog, afterReset, old: (t.match(/OLD-/g) ?? []).length, first: t.split('\n')[0] };
       });
+      assert.ok(r.backlog.inFlight <= 65536 && r.backlog.queued > 0, `handed to xterm.js at once: ${JSON.stringify(r.backlog)}`);
+      assert.equal(r.afterReset, 1, 'the queued output is dropped at the reset, not parsed first');
       assert.equal(r.old, 0, 'no old output after the reset');
       assert.equal(r.first, 'HISTORY-START');
       // a second reconnect before that history reached xterm.js, with an empty
@@ -339,6 +386,50 @@ describe('console', { skip }, () => {
         return { closed, open: !con.gate };
       });
       assert.deepEqual(gate, { closed: true, open: true });
+    } finally {
+      await c.ctx.close();
+    }
+  });
+
+  test('a client that cannot keep up drops its backlog and reconnects for the history (bounded memory)', async () => {
+    const c = await openPage(srv, { width: 1600, height: 900 });
+    try {
+      const marker = `backlog-${Date.now()}`;
+      await fetch(`${srv.url}mock/console`, { method: 'POST', body: JSON.stringify({ text: `\r\n${marker}\r\n` }) });
+      await waitText(c, new RegExp(marker));
+      const r = await c.evaluate(() => {
+        const app = window.pdp11Debug.app;
+        const con = app.console;
+        window.__closes = [];
+        app.conn.on('close', (e) => window.__closes.push(e.code));
+        // 8 MiB arrive faster than xterm.js parses them (distinct messages, as from the network)
+        const chunk = new TextEncoder().encode(`FLOOD ${'f'.repeat(1016)}\r\n`.repeat(8));
+        let most = 0;
+        for (let i = 0; i < 1024; i++) {
+          con.write(chunk.slice());
+          if (i % 64 === 63) most = Math.max(most, con.out.reduce((n, o) => n + (o.bytes?.length ?? 0), 0));
+        }
+        return { most };
+      });
+      assert.ok(r.most <= 4 * 1024 * 1024 + 8192, `the browser held ${r.most} bytes of console output`);
+      await waitFor(() => c.evaluate(() => window.__closes.includes(4001)), { message: 'reconnected for the history' });
+      await waitFor(() => c.evaluate(() => window.pdp11Debug.connected), { timeout: 8000, message: 'connected again' });
+      await waitText(c, new RegExp(marker), 'the history replaced the dropped output');
+      // the usual flood is a few bytes per message: the queue merges them, or it
+      // would hold half a million entries (about 500 MB) long before the cap
+      const small = await c.evaluate(() => {
+        const con = window.pdp11Debug.app.console;
+        const was = con.onBacklog;
+        con.onBacklog = null; // the test measures, nobody reconnects
+        const inFlight = con.inFlight;
+        for (let i = 0; i < 200000; i++) con.write(Uint8Array.of(0x41, 0x42, 0x43, 0x44, 0x45));
+        const r = { entries: con.out.length, queued: con.queued, inFlight, inFlightNow: con.inFlight };
+        con.dropBacklog();
+        con.onBacklog = was;
+        return r;
+      });
+      assert.ok(small.queued > 900000, `the queue took the small messages: ${JSON.stringify(small)}`);
+      assert.ok(small.entries <= small.queued / 4096 + 2, `small messages are merged into blocks: ${JSON.stringify(small)}`);
     } finally {
       await c.ctx.close();
     }

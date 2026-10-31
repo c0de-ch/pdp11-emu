@@ -9,10 +9,13 @@ import unittest
 from simtest import config, panel, progs, simh
 from simtest.config import CFG
 
-N_SOB = 100000000           # instructions per benchmark run
-N_MIX = 60000000
+N_SOB = 25000000            # instructions per benchmark run
+N_MIX = 15000000
+RUNS_PER_PROCESS = 2
+MEASUREMENTS = 3
 LIMIT_DETACHED = 0.03       # slowdown against the unpatched baseline
 LIMIT_ATTACHED = 0.10
+LIMIT_NOISE = LIMIT_DETACHED    # a control run further off than this cannot show that limit
 LIMIT_IDLE_CPU = 0.10       # host CPU share in a WAIT loop, SET CPU IDLE=2
 IDLE_MARGIN = 0.03          # ... or at most this much above the unpatched run
 
@@ -46,64 +49,100 @@ class TestPerf(unittest.TestCase):
         return sim, p
 
     def test_overhead(self):
-        """SOB loop and memory-copy loop: median MIPS of interleaved runs,
-        measured with the on-CPU time of the simulator thread (wall time when
-        the kernel has no schedstat), all simulators on the same host CPU."""
-        variants = [("detached", CFG.bin, False), ("attached 50k/s", CFG.bin, True)]
+        """Cost of the hooks: fails only if every one of 3 measurements exceeds
+        a limit, and at least one of them was trustworthy.  A slow simulator
+        is slow every time; a host that is busy during one measurement (other
+        VMs, a sibling hyperthread: on-CPU time does not see them) is not.  A
+        measurement is trustworthy if its control, the reference simulator
+        measured a second time, agrees with the reference within the smallest
+        limit.  If none was, the host cannot show the limits: the test skips."""
+        trusted = False
+        for attempt in range(MEASUREMENTS):
+            lines, failures, noise = self.measure_overhead()
+            trusted = trusted or noise <= LIMIT_NOISE
+            if not failures:
+                break
+        config.report("\n    ".join(lines + ["  (measurement %d of at most %d)" % (attempt + 1, MEASUREMENTS)]))
+        if failures and not trusted:
+            self.skipTest("the host is too busy to measure the overhead: the same simulator measured "
+                          "twice differs by more than %.0f%% in all %d measurements (last: %s)"
+                          % (100 * LIMIT_NOISE, MEASUREMENTS, failures))
+        self.assertFalse(failures, failures)
+
+    def measure_overhead(self):
+        """SOB loop and memory-copy loop, all simulators on the same host CPU,
+        on-CPU time of the simulator thread (wall time when the kernel has no
+        schedstat).  Every round starts a new process of each simulator: its
+        address space layout and physical pages stay with it for life, and on
+        a VM they alone move one binary by +-12 % (20 processes, the fastest
+        of 5 runs of each: 129-160 MIPS), which more rounds in one process
+        do not average out.  A process's speed is the fastest of its runs,
+        because noise only slows a run; a simulator's speed is the median over
+        its processes.  Returns the report, the limits exceeded and how far
+        the control is from the reference."""
+        ref = "baseline" if CFG.baseline else "detached"
+        variants = [(ref, CFG.baseline or CFG.bin, False), ("control", CFG.baseline or CFG.bin, False)]
         if CFG.baseline:
-            variants.insert(0, ("baseline", CFG.baseline, False))
+            variants.append(("detached", CFG.bin, False))
+        variants.append(("attached 50k/s", CFG.bin, True))
         cpu = max(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None
-        rigs = []
-        for name, binary, attach in variants:
-            sim, p = self.start(name, binary, attach)
-            if cpu is not None:
-                pin(sim, cpu)                           # same core for every run
-            rigs.append((name, sim, p))
         sob, mix = progs.program("SOB_LOOP"), progs.program("COPY_MIX")
         loops = [("SOB loop", sob["SOB0"], N_SOB), ("copy loop", mix["MIX"], N_MIX)]
-        mips = {(n, l): [] for n, s, p in rigs for l, a, k in loops}
-        wall = {(n, l): [] for n, s, p in rigs for l, a, k in loops}
+        mips = {(n, l): [] for n, b, a in variants for l, a2, k in loops}
+        wall = {(n, l): [] for n, b, a in variants for l, a2, k in loops}
+        regs = {}
+        on_cpu = True
         for r in range(CFG.rounds):
-            for name, sim, p in rigs:
+            for name, binary, attach in variants:
+                sim, p = self.start(name, binary, attach)
+                if cpu is not None:
+                    pin(sim, cpu)                       # same core for every run
                 for loop, addr, n in loops:
-                    if p:
-                        p.cancel_halt()
-                    sim.command("deposit pc %o" % addr)
-                    c = sim.thread_cpu_ns()
-                    t = time.monotonic()
-                    sim.start("step %d" % n)
-                    stop = sim.wait_stop(120)
-                    self.assertEqual(stop.why, "Step expired")
-                    dt = stop.time - t
-                    if c is not None:
-                        dt = (sim.thread_cpu_ns() - c) / 1e9
-                    mips[(name, loop)].append(n / dt / 1e6)
-                    wall[(name, loop)].append(n / (stop.time - t) / 1e6)
+                    best, wbest = 0.0, 0.0
+                    for run in range(RUNS_PER_PROCESS):
+                        if p:
+                            p.cancel_halt()
+                        sim.command("deposit pc %o" % addr)
+                        c = sim.thread_cpu_ns()
+                        t = time.monotonic()
+                        sim.start("step %d" % n)
+                        stop = sim.wait_stop(120)
+                        self.assertEqual(stop.why, "Step expired")
+                        dt = stop.time - t
+                        if c is not None:
+                            dt = (sim.thread_cpu_ns() - c) / 1e9
+                        else:
+                            on_cpu = False
+                        best = max(best, n / dt / 1e6)
+                        wbest = max(wbest, n / (stop.time - t) / 1e6)
+                    mips[(name, loop)].append(best)
+                    wall[(name, loop)].append(wbest)
+                if p:
+                    regs[name] = p.regs()
+                sim.close()
         med = {k: statistics.median(v) for k, v in mips.items()}
         wmed = {k: statistics.median(v) for k, v in wall.items()}
-        ref = "baseline" if CFG.baseline else "detached"
-        clock = "on-CPU" if rigs[0][1].thread_cpu_ns() is not None else "wall"
-        lines = ["overhead, median of %d runs, %s time (MIPS; vs %s; wall-time MIPS in brackets):"
-                 % (CFG.rounds, clock, ref)]
+        noise = max(abs(1 - med[("control", l)] / med[(ref, l)]) for l, a, k in loops)
+        lines = ["overhead, median of %d processes, the fastest of %d runs of each, %s time "
+                 "(MIPS; vs %s; wall-time MIPS in brackets):"
+                 % (CFG.rounds, RUNS_PER_PROCESS, "on-CPU" if on_cpu else "wall", ref)]
         failures = []
-        for name, sim, p in rigs:
+        for name, binary, attach in variants:
             cells = []
             for loop, a, k in loops:
                 slow = 1 - med[(name, loop)] / med[(ref, loop)]
                 cells.append("%s %.1f (%+.1f%%) [%.1f]" % (loop, med[(name, loop)], -100 * slow,
                                                        wmed[(name, loop)]))
-                limit = LIMIT_ATTACHED if p else LIMIT_DETACHED
-                if name != ref and slow > limit:
+                limit = LIMIT_ATTACHED if attach else LIMIT_DETACHED
+                if name not in (ref, "control") and slow > limit:
                     failures.append("%s %s: %.1f%% slower (limit %.0f%%)"
                                     % (name, loop, 100 * slow, 100 * limit))
-            if p:
-                regs = p.regs()
-                cells.append("%d samples/s, interval %d" % (regs["sps"], regs["interval"]))
+            if name in regs:
+                cells.append("%d samples/s, interval %d" % (regs[name]["sps"], regs[name]["interval"]))
             lines.append("  %-15s %s" % (name, ", ".join(cells)))
         if not CFG.baseline:
             lines.append("  (no baseline: %s)" % (CFG.baseline_note or "not built"))
-        config.report("\n    ".join(lines))
-        self.assertFalse(failures, failures)
+        return lines, failures, noise
 
     def test_idle_host_cpu(self):
         """WAIT loop with SET CPU IDLE=2 and the export attached: <= 10 % of a

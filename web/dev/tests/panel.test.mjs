@@ -325,10 +325,18 @@ describe('two windows on one panel', { skip }, () => {
         } finally {
           p.send = send;
         }
-        return { out, view: p.controls().sr };
+        const view = p.controls().sr;
+        // no state message at all (the connection hangs): the display gives up on it too
+        p.send = () => {};
+        p.setSR((p.server.sr | 0o40) >>> 0);
+        p.sr.t -= 2000;
+        const alone = p.controls().sr;
+        p.send = send;
+        return { out, view, alone };
       });
       assert.equal(sent.out.length, 1, `nothing sent again (${JSON.stringify(sent.out)})`);
       assert.equal(sent.view, 0o200, "the other viewer's value stands");
+      assert.equal(sent.alone, 0o200, 'an unconfirmed toggle expires without a state message too');
       assert.deepEqual(page.errors, []);
     } finally {
       await page.ctx.close();

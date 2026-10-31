@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -52,12 +53,7 @@ func (m *Manager) Installed(id string) bool {
 	if !ok {
 		return false
 	}
-	raw, err := os.ReadFile(filepath.Join(m.SystemDir(id), markerName))
-	if err != nil {
-		return false
-	}
-	var mk marker
-	if json.Unmarshal(raw, &mk) != nil || mk.ID != id {
+	if !m.hasMarker(id) {
 		return false
 	}
 	for _, a := range sys.Artifacts {
@@ -68,6 +64,17 @@ func (m *Manager) Installed(id string) bool {
 		}
 	}
 	return true
+}
+
+// hasMarker reports whether the marker of a completed installation of this
+// system exists.
+func (m *Manager) hasMarker(id string) bool {
+	raw, err := os.ReadFile(filepath.Join(m.SystemDir(id), markerName))
+	if err != nil {
+		return false
+	}
+	var mk marker
+	return json.Unmarshal(raw, &mk) == nil && mk.ID == id
 }
 
 // Install downloads (cache, import dir, url, mirrors), verifies and
@@ -156,7 +163,7 @@ func (m *Manager) runTask(ctx context.Context, sys *catalog.System, kind, req st
 	defer func() { <-m.installing }()
 
 	m.log.Info("installing", "task", kind, "system", sys.ID)
-	err := m.install(ctx, sys, progress)
+	err := m.install(ctx, sys, kind, progress)
 	// Decompression (the xz dictionary) and the copy buffers peak at about
 	// 200 MB: return that memory now instead of at the scavenger's pace.
 	debug.FreeOSMemory()
@@ -201,8 +208,11 @@ func (m *Manager) progressPublisher(kind, id, req string) progressFunc {
 // working copies in two phases. First every file is extracted and verified
 // next to its working copy (<path>.part): a cancel or an error in this
 // phase removes those files and leaves the old images and the marker as
-// they were. Then commit puts the new files in place.
-func (m *Manager) install(ctx context.Context, sys *catalog.System, progress progressFunc) error {
+// they were. Then commit puts the new files in place. An install over a
+// marker (Installed is false because a disk went missing) restores only what
+// is missing: the disks that are left hold the user's data, and only a
+// factory reset replaces those.
+func (m *Manager) install(ctx context.Context, sys *catalog.System, kind string, progress progressFunc) error {
 	archives := make([]string, len(sys.Artifacts))
 	for i, a := range sys.Artifacts {
 		p, err := m.obtain(ctx, a, m.cacheDir(), progress)
@@ -254,15 +264,17 @@ func (m *Manager) install(ctx context.Context, sys *catalog.System, progress pro
 		m.removeParts(sys)
 		return err
 	}
-	return m.commit(sys, mk)
+	return m.commit(sys, mk, kind == "install" && m.hasMarker(sys.ID))
 }
 
 // commit puts the extracted files in place: it removes the marker (a
 // partly replaced set of images must never look installed), renames every
 // file over its working copy and writes the marker. It is short and not
-// cancelled; a crash in between leaves the system without a marker, so
-// that it is installed again.
-func (m *Manager) commit(sys *catalog.System, mk marker) error {
+// cancelled; a crash in between leaves the system without a marker, so that
+// it is installed again. With keep (a repair) only the missing files are
+// restored and the marker stays: no image is replaced, and a crash in between
+// must not turn the next repair into a full install.
+func (m *Manager) commit(sys *catalog.System, mk marker, keep bool) error {
 	mk.InstalledAt = time.Now().UTC()
 	raw, err := json.MarshalIndent(mk, "", "  ")
 	if err != nil {
@@ -270,14 +282,25 @@ func (m *Manager) commit(sys *catalog.System, mk marker) error {
 		return err
 	}
 	dir := m.SystemDir(sys.ID)
-	if err := os.Remove(filepath.Join(dir, markerName)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		m.removeParts(sys)
-		return err
+	if !keep {
+		if err := os.Remove(filepath.Join(dir, markerName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			m.removeParts(sys)
+			return err
+		}
 	}
 	dirs := map[string]bool{}
 	for _, a := range sys.Artifacts {
 		for _, f := range a.Files {
 			p := m.workingPath(sys.ID, f)
+			if keep {
+				if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+					if err := os.Remove(m.partPath(sys.ID, f)); err != nil {
+						m.log.Warn("cannot remove a partly installed file", "err", err)
+					}
+					continue
+				}
+				m.log.Warn("restoring a missing working disk image from its archive; the other disks stay as they are", "system", sys.ID, "file", f.Path)
+			}
 			if err := os.Rename(m.partPath(sys.ID, f), p); err != nil {
 				m.removeParts(sys)
 				return err
@@ -298,6 +321,37 @@ func (m *Manager) commit(sys *catalog.System, mk marker) error {
 // partPath is where a file of an artifact is extracted before the commit.
 func (m *Manager) partPath(id string, f catalog.ArtifactFile) string {
 	return m.workingPath(id, f) + ".part"
+}
+
+// RemoveStaleFiles deletes what a crash during an install or factory reset
+// leaves behind and nothing else would remove: extracted images
+// (systems/<id>/<path>.part; the system's old images and marker are intact)
+// and temporary archive copies in the cache (.<sha256>.copy-*). A partial
+// download (<sha256>.part in the cache) stays: it is resumed. Only for the
+// holder of the data directory lock: another pdp11d may be extracting.
+func (m *Manager) RemoveStaleFiles() {
+	remove := func(p string) {
+		if err := os.Remove(p); err != nil {
+			m.log.Warn("cannot remove a stale file", "err", err)
+			return
+		}
+		m.log.Info("removed a file left by an interrupted installation", "file", p)
+	}
+	_ = filepath.WalkDir(filepath.Join(m.opts.DataDir, "systems"), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() && strings.HasSuffix(d.Name(), ".part") {
+			remove(p)
+		}
+		return nil
+	})
+	entries, err := os.ReadDir(m.cacheDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") && strings.Contains(e.Name(), ".copy-") {
+			remove(filepath.Join(m.cacheDir(), e.Name()))
+		}
+	}
 }
 
 // removeParts deletes the extracted files of an installation that did not

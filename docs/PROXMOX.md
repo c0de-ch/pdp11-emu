@@ -65,7 +65,7 @@ up to 90 s).
 ```sh
 pct enter 1170                 # a root shell in the container
 apt-get update && apt-get install -y git
-git clone <this repository> pdp11-emu && cd pdp11-emu
+git clone https://github.com/c0de-ch/pdp11-emu.git && cd pdp11-emu
 ./install.sh                   # about a minute; prints the URL
 ```
 
@@ -97,18 +97,19 @@ disk. Inside it either run `install.sh` exactly as above, or install Docker
 and use the image:
 
 ```sh
-git clone <this repository> pdp11-emu && cd pdp11-emu
+git clone https://github.com/c0de-ch/pdp11-emu.git && cd pdp11-emu
+cp .env.example .env          # then set PDP11_PASSWORD in .env
 docker compose up -d
 ```
 
-Docker needs Engine 23 or newer with BuildKit (buildx) and Compose v2.
-Debian 12's own `docker.io` (20.10) and `docker-compose` (1.29) are too old:
-install `docker-ce`, `docker-buildx-plugin` and `docker-compose-plugin` from
-Docker's repository. Debian 13: `apt install docker.io docker-buildx
-docker-compose`; Ubuntu 22.04/24.04: `apt install docker.io docker-buildx
-docker-compose-v2`. Upgrade later with `git pull && docker compose up -d
---build` (the guest OS is shut down cleanly first; the disks stay in the
-volume). Set the VM's time zone (`timedatectl set-timezone Europe/Zurich`) or
+Open `http://<VM address>:8080/`. Without a password anyone who can reach the
+VM's port 8080 controls the machine, and Docker publishes it past a ufw or
+firewalld inside the VM (see Firewall below and README.md, "Security").
+
+Docker needs Engine 23 or newer with BuildKit (buildx) and Compose v2 (the
+packages for Debian and Ubuntu: README.md, "Quick start: Docker"). Upgrade
+later with `git pull && docker compose up -d --build` (the guest OS is shut
+down cleanly first; the disks stay in the volume). Set the VM's time zone (`timedatectl set-timezone Europe/Zurich`) or
 `TZ` in `.env` for the boot dialogues.
 
 Give the VM a shutdown timeout of at least 120 s as well (VM → Options →
@@ -178,7 +179,10 @@ stopped system:
 * **Docker**: `docker compose stop`, then copy the volume, for example
   `docker run --rm -v pdp11emu_pdp11-data:/data:ro -v "$PWD":/backup
   debian:trixie-slim tar -C /data -cSzf /backup/pdp11-data.tar.gz .`, then
-  `docker compose start`.
+  `docker compose start`. Restore the same way, with `docker compose stop`,
+  `docker run --rm -v pdp11emu_pdp11-data:/data -v "$PWD":/backup
+  debian:trixie-slim tar -C /data -xzf /backup/pdp11-data.tar.gz` and `docker
+  compose start`.
 
 A system's disks can always be recreated from the original archive with
 "Factory reset" in the system chooser; back up what you changed on them.

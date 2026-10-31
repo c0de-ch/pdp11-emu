@@ -37,7 +37,8 @@ const PANEL_KEYS = [
   ['Space / Enter', 'Toggle the focused switch or press it (hold)'],
   ['0 … 7', 'Shift an octal digit into the switch register'],
   ['Backspace', 'Shift the switch register right by one octal digit'],
-  ['Esc', 'Clear the switch register'],
+  ['Esc / Delete', 'Clear the switch register'],
+  ['Arrow keys on a knob or the key', 'Turn it'],
   ['L / E / D / C / S', 'LOAD ADRS / EXAM / DEP / CONT / START (hold)'],
   ['T', 'LAMP TEST (hold)'],
   ['H / B', 'Toggle ENABLE/HALT / S INST/S BUS CYCLE'],
@@ -83,10 +84,14 @@ export class Help {
       this.show?.(TABS.some(([id]) => id === tab) ? tab : 'system');
       return;
     }
-    const body = h('div', { class: 'help-body' });
-    const tabBar = h('div', { class: 'tabs', role: 'tablist' });
+    const body = h('div', { class: 'help-body', role: 'tabpanel', id: 'help-panel', tabindex: 0 });
+    const tabBar = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Help' });
     const show = (id) => {
-      for (const b of tabBar.children) b.setAttribute('aria-selected', String(b.dataset.tab === id));
+      for (const b of tabBar.children) {
+        b.setAttribute('aria-selected', String(b.dataset.tab === id));
+        b.tabIndex = b.dataset.tab === id ? 0 : -1;
+      }
+      body.setAttribute('aria-labelledby', `help-tab-${id}`);
       this.cleanup?.();
       this.cleanup = null;
       body.textContent = '';
@@ -95,7 +100,7 @@ export class Help {
     };
     this.show = show;
     for (const [id, label] of TABS) {
-      tabBar.append(h('button', { type: 'button', role: 'tab', 'data-tab': id, onclick: () => show(id) }, label));
+      tabBar.append(h('button', { type: 'button', role: 'tab', id: `help-tab-${id}`, 'aria-controls': 'help-panel', 'data-tab': id, onclick: () => show(id) }, label));
     }
     tabBar.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;

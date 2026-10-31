@@ -190,10 +190,38 @@ describe('layout', { skip }, () => {
       // the first key typed into the console
       await page.click('.console-screen');
       await page.keyboard.press('Control+u');
-      await page.waitForSelector('.ready-banner', { state: 'detached' });
+      await page.waitForSelector('.ready-banner', { state: 'detached', timeout: 2000 }); // not the banner's own 15 s timeout
       assert.deepEqual(page.errors, []);
     } finally {
       await page.ctx.close();
+    }
+  });
+  test('menus stay inside small windows: every item can be reached', async () => {
+    for (const [w, h] of [[390, 844], [844, 390], [640, 360]]) {
+      const page = await openPage(srv, { width: w, height: h });
+      try {
+        const inside = () => page.evaluate(() => {
+          const m = document.querySelector('.menu, .context-menu');
+          const b = m.getBoundingClientRect();
+          const ok = b.left >= 0 && b.top >= 0 && b.right <= innerWidth && b.bottom <= innerHeight;
+          const scrolls = m.scrollHeight <= m.clientHeight + 1 || ['auto', 'scroll'].includes(getComputedStyle(m).overflowY);
+          const clipped = m.scrollWidth > m.clientWidth + 1;
+          return { ok, scrolls, clipped, box: [b.left, b.top, b.right, b.bottom], win: [innerWidth, innerHeight] };
+        });
+        await page.click('button[aria-label="View settings"]');
+        await page.waitForSelector('.menu');
+        let r = await inside();
+        assert.ok(r.ok && r.scrolls && !r.clipped, `settings menu at ${w}x${h}: ${JSON.stringify(r)}`);
+        await page.keyboard.press('Escape');
+        await page.evaluate(() => document.querySelector('.console-frame').scrollIntoView({ block: 'center' }));
+        const b = await page.locator('.console-screen').boundingBox();
+        await page.mouse.click(b.x + 30, Math.max(5, Math.min(b.y + 30, h - 5)), { button: 'right' });
+        await page.waitForSelector('.context-menu');
+        r = await inside();
+        assert.ok(r.ok && r.scrolls, `console menu at ${w}x${h}: ${JSON.stringify(r)}`);
+      } finally {
+        await page.ctx.close();
+      }
     }
   });
 });

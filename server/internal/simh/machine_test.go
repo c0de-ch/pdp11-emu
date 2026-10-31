@@ -1,10 +1,13 @@
 package simh
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -887,5 +890,52 @@ func TestRunConfigReleased(t *testing.T) {
 	h.expect("state:starting", "state:error")
 	if n := p.leases(); n != 0 {
 		t.Fatalf("%d leases after a failed start", n)
+	}
+}
+
+// lockedBuffer is a log destination for a test that reads what the Machine's
+// goroutines write.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestStopsAreLogged: every stop the user can see is logged with its reason
+// (R29); a transparent stop (a speed change) is not.
+func TestStopsAreLogged(t *testing.T) {
+	var logs lockedBuffer
+	h := newHarness(t, func(o *Options, _ *testProvider) {
+		o.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	})
+	m, ctx := h.m, h.ctx()
+	h.powerOnBooted()
+	stops := func() int { return strings.Count(logs.String(), `msg="CPU stopped"`) }
+	if err := m.SetSpeed(ctx, api.SpeedAuthentic); err != nil {
+		t.Fatal(err)
+	}
+	if n := stops(); n != 0 {
+		t.Fatalf("a speed change logged a stop:\n%s", logs.String())
+	}
+	if err := m.Halt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the stop line", func() bool { return stops() > 0 })
+	if n := stops(); n != 1 {
+		t.Fatalf("%d stop lines after a halt:\n%s", n, logs.String())
+	}
+	if !regexp.MustCompile(`msg="CPU stopped" .*reason="Front panel HALT" .*requested=true`).MatchString(logs.String()) {
+		t.Fatalf("the stop line lacks its reason:\n%s", logs.String())
 	}
 }

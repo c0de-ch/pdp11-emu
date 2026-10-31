@@ -34,7 +34,8 @@ the history.
 `0x10` message the client receives is the complete history: always exactly one
 message, possibly only the type byte, never merged with live output. It is the
 end-of-history marker; every later `0x10` message is live output (consecutive
-live output may be merged, ≤ 64 KiB per message).
+live output may be merged, ≤ 64 KiB per message: pdp11d's writer leaves 4 ms
+between writes to a client, and what arrives meanwhile becomes one message).
 
 **Reconnect**: on close the client reconnects with backoff 0.5 s → 5 s (×2, reset
 by a `hello`) and re-sends its subscription via the query string. It reloads
@@ -43,7 +44,9 @@ the page if `hello.server` differs from the version the page was served with
 (otherwise it toasts "reload the page"), so a stale cached page cannot loop. The
 server pings (WebSocket ping frames) every 20 s and drops connections that miss
 2 pings; the client sends `ping` every 20 s and closes (code 4000) when no `pong`
-arrives within 10 s.
+arrives within 10 s. It also closes (code 4001) when more than 4 MiB of console
+output wait in the browser: the reconnect's history replaces them, as after the
+server's `1008`.
 
 **Close codes** (server): `1001` going away (pdp11d stopping; new handshakes get
 HTTP 503 meanwhile); `1008` "client too slow" when a client's send queue exceeds

@@ -500,7 +500,7 @@ func (m *Manager) PrepareRun(workDir string, ports simh.Ports, shmPath string, s
 			p := m.workingPath(id, f)
 			fi, err := os.Stat(p)
 			if err != nil || !fi.Mode().IsRegular() {
-				return nil, fmt.Errorf("%s: working disk image %s is missing (a factory reset restores it)", sys.Name, p)
+				return nil, fmt.Errorf("%s: working disk image %s is missing (the next power-on restores it)", sys.Name, p)
 			}
 			if err := simh.CheckPath(p); err != nil {
 				return nil, err

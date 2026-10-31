@@ -561,6 +561,27 @@ func TestLimiterKeys(t *testing.T) {
 	}
 }
 
+// TestRemoteNamesTheClient: log lines name the client behind a trusted
+// proxy and never believe the header of anyone else (R21).
+func TestRemoteNamesTheClient(t *testing.T) {
+	e := newWebEnv(t, webCfg{opts: Options{TrustedProxies: []string{"10.0.0.0/8"}}})
+	for _, tt := range []struct{ remote, xff, want string }{
+		{"10.0.0.2:4000", "203.0.113.5", "203.0.113.5"},
+		{"10.0.0.2:4000", "1.1.1.1, 203.0.113.5", "203.0.113.5"},
+		{"10.0.0.2:4000", "", "10.0.0.2:4000"},
+		{"198.51.100.7:4000", "203.0.113.5", "198.51.100.7:4000"},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = tt.remote
+		if tt.xff != "" {
+			r.Header.Set("X-Forwarded-For", tt.xff)
+		}
+		if got := e.s.remote(r); got != tt.want {
+			t.Errorf("remote %s, X-Forwarded-For %q: %q, want %q", tt.remote, tt.xff, got, tt.want)
+		}
+	}
+}
+
 // TestLoginRateLimitBehindProxy: behind a trusted proxy the limit counts
 // each client (IPv6 by /64), not the proxy.
 func TestLoginRateLimitBehindProxy(t *testing.T) {

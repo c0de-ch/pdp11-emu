@@ -237,6 +237,26 @@ func TestDataDirLock(t *testing.T) {
 	l2.Close()
 }
 
+// TestInstallRemovesStaleFiles: a crash during a factory reset leaves the
+// extracted image next to the old one; the next holder of the lock removes it
+// (TestServeSecondInstance checks serve).
+func TestInstallRemovesStaleFiles(t *testing.T) {
+	data := t.TempDir()
+	part := filepath.Join(data, "systems", "unixv6", "unix0_v6_rk.dsk.part")
+	if err := os.MkdirAll(filepath.Dir(part), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(part, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"PDP11_DATA": data, "PDP11_CACHE": t.TempDir(), "PDP11_SIMH": "/nonexistent", "PDP11_SHM": filepath.Join(t.TempDir(), "panel")}
+	var errb syncBuffer
+	run([]string{"install", "no-such-system"}, envMap(env), io.Discard, &errb)
+	if _, err := os.Lstat(part); !os.IsNotExist(err) {
+		t.Fatalf("the stale file stays (%v):\n%s", err, errb.String())
+	}
+}
+
 // TestServeBusyPort: a listener that cannot be bound ends serve (exit
 // status 1) before the machine is powered on or the data directory used.
 func TestServeBusyPort(t *testing.T) {
@@ -441,6 +461,13 @@ func TestServeShutdownOnStop(t *testing.T) {
 // and leaves the first one's simulator alone.
 func TestServeSecondInstance(t *testing.T) {
 	env, base := e2eSetup(t)
+	stale := filepath.Join(env["PDP11_DATA"], "systems", "bsd211", "left-by-a-crash.part")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
 	var logs syncBuffer
 	done := make(chan int, 1)
 	go func() { done <- run([]string{"serve"}, envMap(env), io.Discard, &logs) }()
@@ -458,6 +485,9 @@ func TestServeSecondInstance(t *testing.T) {
 			t.Fatalf("serve exited with %d:\n%s", code, logs.String())
 		case <-time.After(100 * time.Millisecond):
 		}
+	}
+	if _, err := os.Lstat(stale); !os.IsNotExist(err) {
+		t.Fatalf("serve left the stale file (%v)", err)
 	}
 	pidFile := filepath.Join(env["PDP11_DATA"], "run", "pdp11.pid")
 	pid, err := os.ReadFile(pidFile)

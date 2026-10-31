@@ -76,12 +76,18 @@ a whole second of virtual time for the ticks of the current second so far;
 the catch-up then slowed the clock until the guest had lost up to a second,
 at every throttle start.  The forced second now counts only its ticks.
 
+sim_stop_timer_services() counted the head of the co-schedule queue twice
+(cosched_interval, and its time, which equals it), so every stop added up to
+twice the unit's wait to its usecs_remaining.  Rare stops never show it; with
+a stop every few ticks (run-time speed switches) the console poll's wait grew
+by itself to a minute: a deaf console, though the clock kept ticking.
+
 sim_timer.c is part of Open SIMH and carries its X11-style licence
 (Copyright (c) Robert M Supnik and the Open SIMH contributors); this patch
 is offered under the same terms.
 ---
 diff --git a/sim_timer.c b/sim_timer.c
-index 333d26a..9764572 100644
+index 333d26a..86b711c 100644
 --- a/sim_timer.c
 +++ b/sim_timer.c
 @@ -188,6 +188,7 @@ static double sim_throt_inst_start;
@@ -215,3 +221,19 @@ index 333d26a..9764572 100644
          if (rtc->clock_unit)
              ++registered_units;
          }
+@@ -2617,7 +2653,14 @@ for (tmr=0; tmr<=SIM_NTIMERS; tmr++) {
+         /* scheduled to fire at the same time as the related */
+         /* clock unit is to fire with excess time reflected in */
+         /* the unit usecs_remaining value */
+-        accum = rtc->cosched_interval;
++        /* The queue head's time is cosched_interval, the others' are deltas:
++           starting from cosched_interval would count the head twice and add
++           up to a second to its wait at every stop.  With a stop every few
++           ticks (run-time speed switches) the console poll's wait grew to a
++           minute of a deaf console. */
++        accum = 0;
++        if (rtc->clock_cosched_queue != QUEUE_LIST_END)
++            rtc->clock_cosched_queue->time = rtc->cosched_interval;
+         while (rtc->clock_cosched_queue != QUEUE_LIST_END) {
+             UNIT *cptr = rtc->clock_cosched_queue;
+             double usecs_remaining = cptr->usecs_remaining;

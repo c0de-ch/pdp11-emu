@@ -351,6 +351,11 @@ body.scroll .app {
   text-overflow: ellipsis;
 }
 
+.status-pill .dot,
+.power-btn .dot {
+  forced-color-adjust: none; /* the colour is the message */
+}
+
 .status-pill .dot {
   flex: none;
   width: 9px;
@@ -393,6 +398,9 @@ body.scroll .app {
   position: fixed;
   z-index: 50;
   min-width: 200px;
+  max-width: calc(100vw - 8px);
+  max-height: calc(100vh - 8px);
+  overflow: auto;
   padding: 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -418,7 +426,10 @@ body.scroll .app {
 .menu-item:hover:not([disabled]),
 .menu-item:focus-visible {
   background: var(--surface-2);
-  outline: none;
+}
+.menu-item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
 }
 
 .menu-item[disabled] {
@@ -429,6 +440,10 @@ body.scroll .app {
 .menu-item[aria-checked="true"]::after {
   content: "✓";
   color: var(--focus);
+}
+.menu-item .muted {
+  white-space: normal;
+  text-align: right;
 }
 
 .menu-sep {
@@ -620,6 +635,7 @@ body.scroll .app {
 }
 
 .progress-text {
+  overflow-wrap: anywhere; /* a download error holds URLs and a sha256 */
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;

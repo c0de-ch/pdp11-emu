@@ -852,9 +852,17 @@ class Machine {
     const guard = this.changeGuard();
     if (guard) return guard;
     if (!sys.installed) return `${sys.name} is not installed`;
+    // as pdp11d: installing, and not installed, while the task runs
+    sys.installing = true;
+    sys.installed = false;
+    this.ev.systems();
     this.ev.progress({ task: 'factoryReset', id, phase: 'extract', pct: 50, bytes: 0, total: 0, text: '', req });
     setTimeout(() => {
+      sys.installing = false;
+      sys.installed = true;
+      // as pdp11d and install() above: "done" arrives first, with the first-run overlay still up
       this.ev.progress({ task: 'factoryReset', id, phase: 'done', pct: 100, bytes: 0, total: 0, text: '', req });
+      this.ev.systems();
       this.retryPower();
     }, 800);
     return '';
@@ -1319,6 +1327,7 @@ export async function startMockServer(options = {}) {
       case 'state':
         for (const k of ['run', 'ready', 'error', 'needsInstall']) if (k in body) m[k] = body[k];
         if (body.controls) Object.assign(m.controls, body.controls);
+        if ('lastStop' in body) m.cons.lastStop = body.lastStop;
         if ('insecure' in body) insecure = !!body.insecure;
         stateDirty = true;
         return ok();

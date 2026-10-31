@@ -459,6 +459,17 @@ func TestFTPBoundedReplies(t *testing.T) {
 			time.Sleep(3 * time.Second)
 			return nil
 		}, errFTPReplyTooLong.Error()},
+		{"endless blank lines", func(w *bufio.Writer) error { // no bytes for the size cap: only the line cap ends it
+			fmt.Fprintf(w, "220-welcome\r\n")
+			for i := 0; i < 2000; i++ {
+				if _, err := fmt.Fprintf(w, "\r\n"); err != nil {
+					return err
+				}
+			}
+			w.Flush()
+			time.Sleep(3 * time.Second)
+			return nil
+		}, errFTPReplyTooLong.Error()},
 		{"reply trickling in", func(w *bufio.Writer) error {
 			fmt.Fprintf(w, "220-welcome\r\n")
 			for i := 0; i < 150; i++ { // a line every 20 ms for 3 s

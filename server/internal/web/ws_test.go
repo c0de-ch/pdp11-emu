@@ -733,6 +733,46 @@ func TestSlowClient(t *testing.T) {
 	}
 }
 
+// TestConsoleBurstIsMerged: SimH delivers console output a few bytes at a time.
+// A burst reaches the browser in about one message per writeGap, not one per
+// few bytes, in order and complete; a lone echo goes out at once.
+func TestConsoleBurstIsMerged(t *testing.T) {
+	e := newWebEnv(t, webCfg{})
+	c := e.dial("sub=console", nil)
+	c.skipInit(1)
+	var want []byte
+	start := time.Now()
+	for i := 0; i < 3000; i++ {
+		b := fmt.Appendf(nil, "%04d\n", i)
+		want = append(want, b...)
+		e.m.Stream().Emit(b)
+		time.Sleep(20 * time.Microsecond) // the writer gets its turn
+	}
+	var got []byte
+	msgs := 0
+	for len(got) < len(want) {
+		got = append(got, c.await("#console", nil).data[1:]...)
+		msgs++
+	}
+	elapsed := time.Since(start)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("got %d bytes, want %d in the same order", len(got), len(want))
+	}
+	if limit := int(elapsed/writeGap) + 5; msgs > limit {
+		t.Errorf("%d console messages in %s, at most %d expected", msgs, elapsed, limit)
+	}
+	t.Logf("%d messages in %s", msgs, elapsed)
+	time.Sleep(10 * writeGap) // nothing written lately
+	sent := time.Now()
+	e.m.Stream().EmitString("x")
+	if m := c.await("#console", nil); string(m.data[1:]) != "x" {
+		t.Fatalf("echo %q", m.data[1:])
+	}
+	if d := time.Since(sent); d > time.Second {
+		t.Errorf("a lone echo took %s", d)
+	}
+}
+
 func TestDeadClientIsDropped(t *testing.T) {
 	e := newWebEnv(t, webCfg{tune: func(tu *tuning) { tu.pingInterval = 50 * time.Millisecond }})
 	// A client that never reads never answers pings.
@@ -817,6 +857,7 @@ func TestRunShutsDownGracefully(t *testing.T) {
 
 func TestToastsFromThePanelGoToEveryone(t *testing.T) {
 	e := newWebEnv(t, webCfg{})
+	e.m.SetReady(true) // not booting: the script starts at once
 	e.sys.SetScript("bsd211", []api.ScriptStep{{Expect: "never", TimeoutSec: 1}})
 	a := e.dial("sub=", nil)
 	a.skipInit(0)

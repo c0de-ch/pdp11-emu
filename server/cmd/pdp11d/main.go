@@ -2,7 +2,8 @@
 // SimH simulator, implements the front panel and serves the web UI.
 //
 //	pdp11d [serve] [flags]                      run the appliance (default)
-//	pdp11d fetch [--cache DIR] [id...]          download + verify archives into a cache
+//	pdp11d fetch [--cache DIR] [--accept-license] [id...]
+//	                                            download + verify archives into a cache
 //	pdp11d install [--accept-license] id...     install systems into the data directory
 //	pdp11d check [dir]                          validate the catalog
 //	pdp11d health [--url URL] [--timeout D]     probe a running pdp11d (container health checks)
@@ -83,7 +84,8 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 func usage(w io.Writer) {
 	fmt.Fprint(w, `usage:
   pdp11d [serve] [flags]                    run the appliance
-  pdp11d fetch [--cache DIR] [id...]        download and verify archives into a cache
+  pdp11d fetch [--cache DIR] [--accept-license] [id...]
+                                            download and verify archives into a cache
                                             (default: all redistributable systems)
   pdp11d install [--accept-license] id...   install systems into the data directory
   pdp11d check [dir]                        validate the catalog
@@ -198,6 +200,7 @@ func serve(args []string, getenv func(string) string, stderr io.Writer) int {
 		return 1
 	}
 	defer mgr.Close()
+	mgr.RemoveStaleFiles() // the lock is held: nobody else is extracting
 	machine, err := simh.New(simh.Options{
 		Binary:         cfg.SIMH,
 		WorkDir:        filepath.Join(cfg.Data, "run"),
@@ -426,6 +429,7 @@ func install(args []string, getenv func(string) string, stdout, stderr io.Writer
 		return 1
 	}
 	defer mgr.Close()
+	mgr.RemoveStaleFiles() // the lock is held: nobody else is extracting
 	mgr.SubscribeProgress(printProgress(stdout))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

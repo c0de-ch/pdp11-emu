@@ -314,6 +314,8 @@ class TestPanel(unittest.TestCase):
         pops = [s for s in samples if pa(s.addr) == 0o776 and not s.addr & (WR | IFETCH)]
         self.assertTrue(pops, "no RTI pop samples")
         self.assertEqual({mode(s.addr) for s in pops}, {0}, "RTI kernel stack pop not in kernel mode")
+        # the RTI was fetched in kernel mode, which it left: its IR is read there
+        self.assertEqual({s.ir for s in pops}, {0o000002}, "IR of the RTI samples")
         trapped = [s for s in samples if s.addr & IFETCH and mode(s.addr) == 3]
         for s in trapped:                              # the user TRAP, fetched in user mode
             self.assertEqual((pa(s.addr), s.ir), (0o400000, progs.MODE_USER_TRAP))
@@ -661,11 +663,17 @@ class TestPanel(unittest.TestCase):
         for target in (0, 10000, 200000, 0):
             p.set_target_rate(target)
             time.sleep(0.6)
-            wr, t = p.u32("ring_wr"), time.monotonic()
-            time.sleep(0.5)
-            rate = (p.u32("ring_wr") - wr) / (time.monotonic() - t)
             want = target or 50000
-            regs = p.regs()
+            # One reading is one 0.5 s of ring_wr and one 100 ms window of
+            # sps: a host that preempts the simulator spoils it (seen: 84205
+            # for 50000), a wrong rate spoils every one.
+            for attempt in range(5):
+                wr, t = p.u32("ring_wr"), time.monotonic()
+                time.sleep(0.5)
+                rate = (p.u32("ring_wr") - wr) / (time.monotonic() - t)
+                regs = p.regs()
+                if abs(rate - want) <= 0.2 * want and abs(regs["sps"] - want) <= 0.2 * want:
+                    break
             self.assertLessEqual(abs(rate - want), 0.2 * want, (target, rate))
             self.assertLessEqual(abs(regs["sps"] - want), 0.2 * want, (target, regs["sps"]))
             got.append("%d -> %.0f/s (interval %d)" % (want, rate, regs["interval"]))

@@ -147,7 +147,11 @@ export async function typeLine(page, text) {
 
 /** Output lines of the last "# cmd" in the console, up to the next prompt. */
 export async function outputOf(page, cmd) {
-  const lines = await consoleLines(page);
+  return outputIn(await consoleLines(page), cmd);
+}
+
+/** The same from lines already read: use one reading when the prompt is checked too. */
+export function outputIn(lines, cmd) {
   let i = -1;
   for (let k = lines.length - 1; k >= 0; k--) {
     if (lines[k].trimEnd() === `# ${cmd}`) {

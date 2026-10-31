@@ -31,7 +31,8 @@ fails. A page load that a network change on the host aborts
 
 Node 20+, Go (to build pdp11d), the patched SimH (`simh/out/pdp11`, see
 `simh/build.sh`), `playwright-core` and a Playwright Chromium (headless shell or
-full Chromium under `~/.cache/ms-playwright`, or `$CHROMIUM`). No browser is
+full Chromium under `$PLAYWRIGHT_BROWSERS_PATH` or `~/.cache/ms-playwright`, or
+`$CHROMIUM`). No browser is
 downloaded by the tests. When something is missing the suite is skipped with
 the reason.
 
@@ -50,12 +51,13 @@ About two minutes with an archive cache. Settings (environment):
 | Variable | Default | Meaning |
 |---|---|---|
 | `E2E_WORK` | new temp dir | work dir: `pdp11d` binary, `data/`, `pdp11d.log`, `timings.json` |
-| `E2E_SHOTS` | `$E2E_WORK/shots` | screenshots (`a-…` to `f-…`, `FAILED-<scenario>.png`) |
+| `E2E_SHOTS` | `$E2E_WORK/shots` | screenshots (`a-…` to `i-…`, `FAILED-<scenario>.png`) |
 | `E2E_LISTEN` | `127.0.0.1:<free port>` | pdp11d listen address (127.0.0.1 only) |
 | `E2E_PORT_BASE` | a free port | SimH console port (`PDP11_PORT_BASE`) |
 | `E2E_SHM` | `$E2E_WORK/shm/panel` | panel export file (`PDP11_SHM`; it is locked, so one per instance) |
 | `PDP11_CACHE` | none | read-only archive cache(s), `:`-separated |
 | `PDP11_SIMH` | `simh/out/pdp11` | the patched simulator |
+| `GO` | `go` | the Go command |
 | `E2E_BUILD_RETRIES` | `3` | `go build` retries, 30 s apart (a tree being edited may not compile for a moment) |
 | `E2E_KEEP` | unset | keep the disks and the binary of a temporary work dir (an explicit `E2E_WORK` is always kept) |
 

@@ -1,7 +1,7 @@
 # PDP-11/70 appliance with Docker Compose (README.md "Quick start: Docker").
 # Needs Docker Engine 23+ with BuildKit (buildx) and Compose v2.
 #
-#   cp .env.example .env     # optional: password, time zone, ports
+#   cp .env.example .env     # then set PDP11_PASSWORD (also: time zone, ports)
 #   docker compose up -d     # builds pdp11emu:latest from this checkout
 #   open http://<host>:8080/
 #
@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
     # pdp11d runs the guest's shutdown script on SIGTERM
     # (PDP11_SHUTDOWN_ON_STOP=1 in the image): give it time, or the next boot
-    # repairs the file systems (2.11BSD: fsck, about 30 s).
+    # repairs the file systems (2.11BSD: fsck and a reboot, 20-35 s more).
     stop_grace_period: 90s
     ports:
       # PDP11_HTTP_PORT: a port or address:port, e.g. 127.0.0.1:8080. A

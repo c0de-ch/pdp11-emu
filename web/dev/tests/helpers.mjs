@@ -3,8 +3,8 @@
 // playwright-core is resolved from web/dev/node_modules, or from the
 // directory in $PLAYWRIGHT_CORE (a node_modules dir or the package itself).
 // The browser is $CHROMIUM, else the newest Playwright headless shell or
-// Chromium under ~/.cache/ms-playwright. Tests are skipped when either is
-// missing.
+// Chromium under $PLAYWRIGHT_BROWSERS_PATH (default ~/.cache/ms-playwright).
+// Tests are skipped when either is missing.
 //
 // The mock sends pdp11d's Content-Security-Policy; every page of a context
 // made by newContext() reports violations (securitypolicyviolation events
@@ -36,7 +36,7 @@ function loadPlaywright() {
 
 function findChromium() {
   if (process.env.CHROMIUM && existsSync(process.env.CHROMIUM)) return process.env.CHROMIUM;
-  const root = join(homedir(), '.cache', 'ms-playwright');
+  const root = process.env.PLAYWRIGHT_BROWSERS_PATH || join(homedir(), '.cache', 'ms-playwright');
   if (!existsSync(root)) return null;
   const dirs = readdirSync(root).sort().reverse();
   for (const [prefix, rel] of [['chromium_headless_shell-', 'chrome-linux/headless_shell'], ['chromium-', 'chrome-linux/chrome']]) {
@@ -54,7 +54,7 @@ function findChromium() {
 export const pw = loadPlaywright();
 export const chromiumPath = findChromium();
 export const skip = !pw ? 'playwright-core not found (npm install in web/dev or set PLAYWRIGHT_CORE)'
-  : !chromiumPath ? 'no Chromium found (set CHROMIUM)' : false;
+  : !chromiumPath ? 'no Chromium found (set CHROMIUM or PLAYWRIGHT_BROWSERS_PATH)' : false;
 
 let browserPromise = null;
 export function browser() {

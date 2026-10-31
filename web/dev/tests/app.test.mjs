@@ -89,6 +89,99 @@ describe('application', { skip }, () => {
     }
   });
 
+  test('a reload with the console popped out: Bring back shows the console again', async () => {
+    const page = await openPage(srv, { width: 1600, height: 900 });
+    try {
+      const [popup] = await Promise.all([page.ctx.waitForEvent('page'), page.click('.pop-console')]);
+      await popup.waitForFunction(() => window.pdp11Debug?.connected && window.pdp11Debug.consoleText().length > 0, null, { timeout: 10000 });
+      const shown = await popup.evaluate(() => window.pdp11Debug.consoleText());
+      // the reloaded window connects before it hears from the pop-out
+      await page.reload();
+      await page.waitForFunction(() => window.pdp11Debug?.connected, null, { timeout: 10000 });
+      await page.waitForSelector('#console-away:not([hidden])', { timeout: 5000 });
+      await waitFor(() => page.evaluate(() => !window.pdp11Debug.app.conn.subs.includes('console')), { message: 'console given up' });
+      const closed = popup.waitForEvent('close', { timeout: 5000 });
+      await page.click('#console-away button');
+      await closed;
+      await waitFor(async () => (await page.evaluate(() => window.pdp11Debug.consoleText())) === shown, { message: 'the history after Bring back' });
+    } finally {
+      await page.ctx.close();
+    }
+  });
+
+  test('the focused menu item has a focus ring', async () => {
+    const page = await openPage(srv, { width: 1600, height: 900 });
+    try {
+      await page.focus('button[aria-label="View settings"]');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.menu');
+      await page.keyboard.press('ArrowDown');
+      const o = await page.evaluate(() => { const c = getComputedStyle(document.activeElement); return { style: c.outlineStyle, width: parseFloat(c.outlineWidth), color: c.outlineColor }; });
+      assert.ok(o.style === 'solid' && o.width >= 2, JSON.stringify(o));
+      await page.keyboard.press('Escape');
+    } finally {
+      await page.ctx.close();
+    }
+  });
+
+  test('the speed radio group: one tab stop, the arrow keys choose', async () => {
+    const page = await openPage(srv, { width: 1600, height: 900 });
+    const speed = () => page.evaluate(() => window.pdp11Debug.state.speed);
+    try {
+      const was = await speed();
+      assert.equal(was, 'fast');
+      assert.deepEqual(await page.locator('.seg button').evaluateAll((b) => b.map((x) => x.tabIndex)), [0, -1], 'one tab stop: the checked radio');
+      await page.focus('.seg button[aria-checked="true"]');
+      await page.keyboard.press('ArrowRight');
+      await waitFor(async () => (await speed()) === 'authentic', { message: 'ArrowRight: authentic' });
+      assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Authentic');
+      assert.deepEqual(await page.locator('.seg button').evaluateAll((b) => b.map((x) => x.tabIndex)), [-1, 0]);
+      await page.keyboard.press('ArrowLeft');
+      await waitFor(async () => (await speed()) === 'fast', { message: 'ArrowLeft: fast' });
+    } finally {
+      await page.ctx.close();
+    }
+  });
+
+  test('help: a tab list with one tab stop and a tab panel', async () => {
+    const page = await openPage(srv, { width: 1600, height: 900 });
+    try {
+      await page.click('button[aria-label="Help"]');
+      await page.focus('.tabs button[aria-selected="true"]');
+      await page.keyboard.press('ArrowRight');
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.tab), 'panel');
+      assert.deepEqual(await page.locator('.tabs button').evaluateAll((b) => b.map((x) => x.tabIndex)), [-1, 0, -1, -1, -1]);
+      assert.equal(await page.getAttribute('.help-body', 'role'), 'tabpanel');
+      assert.equal(await page.getAttribute('.help-body', 'aria-labelledby'), 'help-tab-panel');
+      await page.keyboard.press('Tab');
+      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('role')), 'tabpanel', 'Tab moves to the text');
+      await page.keyboard.press('Escape');
+    } finally {
+      await page.ctx.close();
+    }
+  });
+
+  test('Bring back and Tab in a menu leave the keyboard focus on a control', async () => {
+    const page = await openPage(srv, { width: 1600, height: 900 });
+    try {
+      await page.focus('button[aria-label="View settings"]');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.menu');
+      await page.keyboard.press('Tab');
+      assert.equal(await page.isVisible('.menu'), false, 'Tab closes the menu');
+      assert.ok(await page.evaluate(() => document.activeElement?.classList.contains('pop-panel')), 'Tab moves on from the settings button');
+      const [popup] = await Promise.all([page.ctx.waitForEvent('page'), page.keyboard.press('Enter')]);
+      await page.waitForSelector('#panel-away:not([hidden])');
+      await page.focus('#panel-away button');
+      const closed = popup.waitForEvent('close', { timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await closed;
+      assert.ok(await page.evaluate(() => document.activeElement?.classList.contains('hit-paddle')), 'Bring back from the keyboard: focus on the panel');
+    } finally {
+      await page.ctx.close();
+    }
+  });
+
   test('pop out the panel: the main window shows "Bring back" until the pop-out closes', async () => {
     const page = await openPage(srv, { width: 1600, height: 900 });
     try {
@@ -230,6 +323,25 @@ describe('application', { skip }, () => {
       await page.evaluate(() => window.pdp11Debug.app.send({ type: 'speed', value: 'fast' }));
       await page.evaluate(() => window.pdp11Debug.app.send({ type: 'latch', name: 'ENABLE_HALT', value: 'enable' }));
       await page.evaluate(() => window.pdp11Debug.app.send({ type: 'boot' }));
+    } finally {
+      await page.ctx.close();
+    }
+  });
+
+  test('toggle-in tutorial with the keyboard: the focus moves into the card, Esc closes it and gives the focus back', async () => {
+    const page = await openPage(srv, { width: 1600, height: 900 });
+    const inCard = () => page.evaluate(() => !!document.activeElement?.closest('.tutorial'));
+    try {
+      await page.focus('button[aria-label="Help"]');
+      await page.keyboard.press('Enter');
+      await page.click('.tabs button[data-tab="tutorial"]');
+      await page.focus('.help-body button:has-text("Open the tutorial")');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.tutorial');
+      assert.ok(await inCard(), 'the focus is in the card');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.isVisible('.tutorial'), false, 'Esc closes it');
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Help', 'the focus is back on Help');
     } finally {
       await page.ctx.close();
     }
@@ -481,12 +593,14 @@ describe('first run and banners', { skip }, () => {
   after(closeBrowser);
 
   test('first run: the overlay shows the download, then "Booting…", then the ready banner', async () => {
-    const srv = await mock({ firstRun: true, installMs: 1500, insecure: true });
+    // the mock installs from its start: a browser that starts slowly (a loaded or
+    // single CPU) must still see the download, so it lasts longer than a page load
+    const srv = await mock({ firstRun: true, installMs: 5000, insecure: true });
     const page = await openPage(srv, { width: 1600, height: 900 });
     try {
       await page.waitForSelector('.overlay-card');
       await waitFor(async () => /Downloading 2\.11BSD… [\d.]+ [KMG]?B \/ 47\.9 MB/.test(await page.textContent('.overlay-card')), { message: 'download progress text' });
-      await waitFor(async () => /Booting/.test((await page.textContent('.overlay-card').catch(() => '')) ?? ''), { timeout: 8000, message: 'booting' });
+      await waitFor(async () => /Booting/.test((await page.textContent('.overlay-card').catch(() => '')) ?? ''), { timeout: 12000, message: 'booting' });
       await page.waitForSelector('.overlay-card', { state: 'detached', timeout: 15000 });
       await page.waitForSelector('.ready-banner');
       // the no-password banner is persistent until dismissed
@@ -528,6 +642,11 @@ describe('first run and banners', { skip }, () => {
       await page.waitForSelector('dialog.dialog[open] .licence-text', { timeout: 5000 });
       assert.match(await page.textContent('dialog.dialog[open] h2'), /Install RSX-11M-PLUS/);
       await page.keyboard.press('Escape');
+      await page.waitForSelector('dialog.dialog[open]', { state: 'detached' });
+      // declined: Boot asks again instead of doing nothing
+      await page.click('.toolbar button:has-text("Boot")');
+      await page.waitForSelector('dialog.dialog[open] .licence-text', { timeout: 5000 });
+      await page.keyboard.press('Escape');
     } finally {
       await page.ctx.close();
       await srv.close();
@@ -563,6 +682,23 @@ describe('dialogs, toasts, live regions, security headers', { skip }, () => {
         if (await page.locator('dialog.dialog[open]').count()) await page.keyboard.press('Escape'); // the chooser
       }
       assert.equal(await page.evaluate(() => window.pdp11Debug.state.run), 'halted', 'nothing happened');
+      // the tutorial asks too, and with Cancel it does nothing
+      await page.evaluate(() => window.pdp11Debug.app.openTutorial());
+      await page.click('.tutorial button:has-text("Auto-toggle")');
+      const td = await waitFor(() => dialog().then((x) => x?.actions.includes('plug') && x), { message: 'tutorial confirmation' });
+      assert.match(td.text, /is still in memory/);
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('dialog.dialog[open]', { state: 'detached' });
+      // an OS that halted itself has shut down: the plain confirmation
+      await fetch(`${srv.url}mock/state`, { method: 'POST', body: JSON.stringify({ lastStop: 'HALT instruction' }) });
+      await waitFor(() => page.evaluate(() => window.pdp11Debug.state.console.lastStop === 'HALT instruction'), { message: 'lastStop' });
+      await page.click('.power-btn');
+      await waitFor(dialog, { message: 'dialog after a HALT instruction' });
+      assert.match((await dialog()).text, /The CPU is not running, so no operating system needs to be shut down/);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('dialog.dialog[open]', { state: 'detached' });
+      await fetch(`${srv.url}mock/state`, { method: 'POST', body: JSON.stringify({ lastStop: 'Front panel HALT' }) });
+      await waitFor(() => page.evaluate(() => window.pdp11Debug.state.console.lastStop === 'Front panel HALT'), { message: 'lastStop back' });
       // Continue and shut down: ENABLE, CONT, then the clean shutdown
       await page.click('.power-btn');
       await page.click('dialog.dialog[open] [data-value="resume"]');
@@ -602,6 +738,7 @@ describe('dialogs, toasts, live regions, security headers', { skip }, () => {
       await page.click('.toolbar button:has-text("Shut down")');
       await waitFor(() => page.evaluate(() => window.pdp11Debug.state.run === 'off'), { timeout: 10000, message: 'off' });
       await waitFor(() => page.evaluate(() => /power is off/.test(document.querySelector('#toasts').textContent)), { message: 'final message' });
+      await waitFor(() => page.evaluate(() => !document.querySelector('#toasts .toast')), { timeout: 8000, message: 'the final message times out' });
       const t = await page.evaluate(() => window.__toasts);
       assert.equal(t.max, 1, `one toast at a time (${JSON.stringify(t)})`);
       assert.deepEqual(t.texts.map((x) => x.replace(/×$/, '')), ['Typing “root”', 'Typing “shutdown -h now”', 'Waiting for the system to halt…', 'The OS has shut down; power is off.']);
@@ -682,10 +819,21 @@ describe('dialogs, toasts, live regions, security headers', { skip }, () => {
   });
 
   test('screen readers hear run-state changes, not the instruction rate; the first-run overlay announces phases only', async () => {
-    const srv = await mock({ firstRun: true, installMs: 1500 });
+    // the mock installs from its start: a browser that starts slowly (a loaded or
+    // single CPU) must still see the download, so it lasts longer than a page load
+    const srv = await mock({ firstRun: true, installMs: 6000 });
     const ctx = await newContext({ viewport: { width: 1600, height: 900 } });
     // status regions that appear together with their text: not every screen reader reads those
     await ctx.addInitScript(() => {
+      // from the first moment: a loaded host may have shown the first phase before the page is connected
+      window.__live = [];
+      new MutationObserver((ms) => {
+        for (const m of ms) {
+          const t = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+          const region = t?.closest('[aria-live]:not([aria-live="off"]), [role="status"], [role="alert"]');
+          if (region && window.__live.at(-1) !== region.textContent) window.__live.push(region.textContent);
+        }
+      }).observe(document, { childList: true, subtree: true, characterData: true });
       window.__bornWithText = [];
       new MutationObserver((ms) => {
         for (const m of ms) {
@@ -698,15 +846,6 @@ describe('dialogs, toasts, live regions, security headers', { skip }, () => {
     });
     const page = await openPage(srv, { context: ctx });
     try {
-      await page.evaluate(() => {
-        window.__live = [];
-        const watch = (el) => new MutationObserver(() => window.__live.push(el.textContent)).observe(el, { childList: true, subtree: true, characterData: true });
-        for (const el of document.querySelectorAll('[aria-live]:not([aria-live="off"]), [role="status"], [role="alert"]')) watch(el);
-        // regions added later (the overlay's)
-        new MutationObserver((ms) => {
-          for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) for (const el of [n, ...n.querySelectorAll('*')]) if (el.getAttribute('role') === 'status') watch(el);
-        }).observe(document.body, { childList: true, subtree: true });
-      });
       assert.equal(await page.getAttribute('.status-pill', 'aria-live'), null, 'the pill is not a live region');
       assert.equal(await page.getAttribute('.status-pill', 'role'), null);
       await waitFor(() => page.evaluate(() => window.pdp11Debug.state.ready), { timeout: 15000, message: 'installed and ready' });
@@ -719,6 +858,55 @@ describe('dialogs, toasts, live regions, security headers', { skip }, () => {
       assert.ok(live.length < 25, `${live.length} announcements`);
       // the overlay's region is in the page before its first phase, so that phase is read too
       assert.deepEqual(await page.evaluate(() => window.__bornWithText.filter((t) => /^(Setting up|Booting)/.test(t))), []);
+    } finally {
+      await ctx.close();
+      await srv.close();
+    }
+  });
+
+  test('a factory reset of the selected system ends with a toast; a failed install reports its error once', async () => {
+    const srv = await mock({ off: true });
+    const page = await openPage(srv, { width: 1600, height: 900 });
+    const toasts = () => page.locator('#toasts .toast').allInnerTexts();
+    try {
+      await waitFor(() => page.evaluate(() => window.pdp11Debug.state?.run === 'off'), { message: 'off' });
+      // during the reset the first-run overlay shows; it says nothing about the result of a reset
+      await page.evaluate(() => window.pdp11Debug.app.send({ type: 'factoryReset', id: 'bsd211' }));
+      await waitFor(async () => (await toasts()).some((t) => /restored to factory state/.test(t)), { message: 'the reset toast' });
+      await page.evaluate(() => { for (const t of document.querySelectorAll('#toasts .toast')) t.remove(); });
+      await page.evaluate(() => {
+        const app = window.pdp11Debug.app;
+        const text = 'cannot download x.tar.gz (1 bytes, sha256 abc); tried http://mirror.invalid/x.tar.gz';
+        app.onProgress({ task: 'install', id: 'bsd211', phase: 'error', text });
+        app.onState({ ...app.state, run: 'error', error: `installing 2.11BSD: ${text}` });
+      });
+      assert.equal((await toasts()).length, 1, `one toast for one failure: ${JSON.stringify(await toasts())}`);
+      // any other simulator error still gets its own, with the way to the log
+      await page.evaluate(() => {
+        const app = window.pdp11Debug.app;
+        app.onState({ ...app.state, run: 'error', error: 'the simulator exited unexpectedly' });
+      });
+      assert.ok((await toasts()).some((t) => /exited unexpectedly/.test(t) && /Simulator log/.test(t)), JSON.stringify(await toasts()));
+    } finally {
+      await page.ctx.close();
+      await srv.close();
+    }
+  });
+
+  test('forced colours (Windows high contrast): the lamps and status dots are still drawn', async () => {
+    const srv = await mock();
+    const ctx = await newContext({ viewport: { width: 1600, height: 900 }, forcedColors: 'active' });
+    const page = await openPage(srv, { context: ctx });
+    try {
+      await page.waitForSelector('.panel-frame .lamp');
+      const r = await page.evaluate(() => ({
+        forced: matchMedia('(forced-colors: active)').matches,
+        lamp: getComputedStyle(document.querySelector('.lamp')).backgroundImage,
+        dot: getComputedStyle(document.querySelector('.status-pill .dot')).forcedColorAdjust,
+      }));
+      assert.ok(r.forced, 'the emulation is on');
+      assert.match(r.lamp, /radial-gradient/, 'a lamp keeps its gradient');
+      assert.equal(r.dot, 'none');
     } finally {
       await ctx.close();
       await srv.close();

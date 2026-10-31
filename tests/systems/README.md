@@ -14,9 +14,9 @@ python3 -I tests/systems/bootmatrix.py --boots 2 --second-boot
 # one system, plus a telnet login on its extra terminal lines
 python3 -I tests/systems/bootmatrix.py --system bsd211 --tty
 
-# the Unix systems, and whether their clocks keep time
+# the systems whose clocks can be read to the second, and whether they keep time
 python3 -I tests/systems/bootmatrix.py --system bsd211 --system bsd211-pl499 \
-    --system unixv7 --system unixv6 --system unixv5 --clock
+    --system unixv7 --system unixv6 --system unixv5 --system rt11 --system rsx11mp --clock
 ```
 
 ## What one run does
@@ -50,9 +50,10 @@ python3 -I tests/systems/bootmatrix.py --system bsd211 --system bsd211-pl499 \
    `readyPattern` appears.
 6. **Session.** `tests.session` from system.json (log in, compile or run something, check the
    output). Each step waits for its `expect` (a literal substring of output produced after the
-   previous step's send), then types `send`. With `--clock`, the Unix systems then type `date`,
-   wait 20 s and type `date` again: the guest clock must have advanced the wall time within 10 %
-   plus 1 s (a kernel built for a 50 Hz line clock under SimH's default 60 Hz gains 20 %).
+   previous step's send), then types `send`. With `--clock`, the Unix systems then type `date`
+   (RT-11 `TIME`, RSX `TIM`), wait 20 s and type it again: the guest clock must have advanced the
+   wall time within 10 % plus 1 s (a kernel built for a 50 Hz line clock under SimH's default
+   60 Hz gains 20 %).
 7. **Idle CPU.** Host CPU of the simulator process over `--idle-secs` (default 10) while the
    system sits at its prompt.
 8. **Shutdown.** `shutdownScript` as pdp11d's "Shut down OS" types it (with its 250 ms pause
@@ -98,5 +99,5 @@ go test -tags matrix -run TestMatrix -timeout 3h -v ./server/cmd/pdp11d/ -args \
 It prints a table (install s, ready s from process start or key POWER, boot → ready s,
 session, panel frames in 2 s, shutdown s, SIGTERM → exit s) and writes `matrix.json`,
 `pdp11d-<n>.log`, `console-<n>.txt` and `events-<n>.txt` (timestamped WebSocket messages and
-typed input) under `-work`. `-clock` also checks, for the Unix systems after the session,
-that the guest clock keeps time while the system idles (`date`, 20 s, `date`).
+typed input) under `-work`. `-clock` also checks, for the Unix systems, RT-11 and RSX after the
+session, that the guest clock keeps time while the system idles (`date`, 20 s, `date`).

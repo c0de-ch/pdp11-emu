@@ -79,6 +79,10 @@ func (m outMsg) size() int {
 const (
 	maxMerged   = 64 << 10  // merged console output per message
 	writeBudget = 256 << 10 // bytes taken from the queue before the frame slot is served
+	// SimH delivers console output a few bytes at a time: without a pause between
+	// writes a flood makes up to 20000 WebSocket messages a second, whose handling
+	// costs a browser more than the drawing and makes a slow one fall behind.
+	writeGap = 4 * time.Millisecond
 )
 
 // subscription is one channel of one client. Output that arrives while
@@ -291,6 +295,7 @@ func (c *client) take() (msgs []wsMsg, frame []byte) {
 
 func (c *client) writeLoop() {
 	defer c.cancel() // a failed write ends the connection
+	var last time.Time
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -298,6 +303,9 @@ func (c *client) writeLoop() {
 		case <-c.wake:
 		}
 		for {
+			// What arrives within writeGap of the last write waits and is merged
+			// by take; what arrives later (a typed character's echo) goes at once.
+			time.Sleep(writeGap - time.Since(last))
 			msgs, frame := c.take()
 			if len(msgs) == 0 && frame == nil {
 				break
@@ -310,6 +318,7 @@ func (c *client) writeLoop() {
 			if frame != nil && !c.write(websocket.MessageBinary, frame) {
 				return
 			}
+			last = time.Now()
 		}
 	}
 }

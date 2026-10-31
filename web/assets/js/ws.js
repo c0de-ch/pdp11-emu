@@ -61,10 +61,13 @@ export class Connection extends Emitter {
     }
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
+    const asked = [...this.subs]; // the server starts with the channels in the URL
     ws.onopen = () => {
       if (ws !== this.ws) return;
       this.connected = true;
       this.emit('open');
+      // the subscription changed while connecting (a pop-out answered a reloaded window)
+      if (asked.length !== this.subs.length || !asked.every((s) => this.subs.includes(s))) this.send({ type: 'subscribe', sub: this.subs });
       this.emit('subscribed', [...this.subs], null);
       this.startPing();
     };
@@ -109,6 +112,11 @@ export class Connection extends Emitter {
     try {
       await fetch(new URL('api/status', this.base), { credentials: 'same-origin', cache: 'no-store' });
     } catch { /* pdp11d not reachable yet: the next handshake fails too */ }
+  }
+
+  /** Drops the connection and reconnects: every channel sends its history again. */
+  reconnect(reason) {
+    this.ws?.close(4001, reason);
   }
 
   /** Reconnect immediately (e.g. the user clicked "retry"). */

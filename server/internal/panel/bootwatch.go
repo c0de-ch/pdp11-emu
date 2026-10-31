@@ -67,6 +67,16 @@ func (p *Panel) cancelBootWatch(bw *bootWatch) {
 	p.mu.Unlock()
 }
 
+// bootInProgress reports whether a boot the panel started has not reached the
+// system's ready prompt yet (Run drops the watch when it ends, before the
+// daemon's ShutdownOS, and the watch outlives the prompt until Run notices).
+func (p *Panel) bootInProgress() bool {
+	p.mu.Lock()
+	booting := p.bootWatch != nil || p.bootAtExit
+	p.mu.Unlock()
+	return booting && !p.m.Ready()
+}
+
 // dropBootWatchLocked ends the current watch. Caller holds p.mu.
 func (p *Panel) dropBootWatchLocked() {
 	if bw := p.bootWatch; bw != nil {

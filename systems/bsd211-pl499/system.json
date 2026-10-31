@@ -4,7 +4,7 @@
   "short": "2.11BSD pl499",
   "category": "unix",
   "order": 11,
-  "description": "The newest 2.11BSD: patch level 499 of January 2026, built by Johnny Billquist, who maintains the official 2.11BSD patches (kernel \"pidp\", 1 GB RA82 disk). The same system as the default 2.11BSD entry with two more years of fixes. It is downloaded by FTP from ftp.dfupdate.se; if that file is ever replaced upstream, the checksum no longer matches and the install stops with an error.",
+  "description": "The newest 2.11BSD: patch level 499 of January 2026, built by Johnny Billquist, who maintains the official 2.11BSD patches (kernel \"pidp\", 1 GB RA82 disk). The same system as the default 2.11BSD entry with two more years of fixes. The first boot switches on the image's automatic multi-user boot and reboots once by itself. It is downloaded by FTP from ftp.dfupdate.se; upstream regenerates that file from time to time (this entry pins the one of 27 October 2026), and when it has been replaced the checksum no longer matches and the install stops with an error.",
   "license": {
     "name": "BSD licence + Caldera \"Ancient UNIX\" licence",
     "class": "redistributable",
@@ -18,7 +18,7 @@
       "note": "no password"
     }
   ],
-  "shutdown": "Log in as root and type shutdown -h now: 2.11BSD syncs the disks, prints \"halting\" and halts the CPU, and the machine can be switched off. Shut down OS does this for you (it logs in as root first if the console shows login:).",
+  "shutdown": "Log in as root and type shutdown -h now: 2.11BSD syncs the disks, prints \"halting\" and halts the CPU, and the machine can be switched off. Shut down OS does this for you: it first types root, which logs in at login: and is harmless at a shell prompt; leave any program first.",
   "shutdownScript": [
     {
       "send": "root\r"
@@ -32,14 +32,14 @@
       "send": "shutdown -h now\r"
     }
   ],
-  "notes": "## Log in\n\nLog in as **root** (no password); set a password with `passwd` if others can reach this machine.\n\nThe PDP-11/70 has no battery clock and there is no network, so the clock starts at the date stored on the disk (May 2026). Set it as root with `date yymmddhhmm`, e.g. `date 2610221530`.\n\n## Things to try\n\n* `uname -a`, `cat /VERSION`, `df`, `ps ax`, `who`: a BSD UNIX from 1992, patched until 2026.\n* Write a C program and compile it:\n\n  ```\n  cat > hello.c\n  main() { printf(\"hello, world\\n\"); }\n  ```\n\n  then Ctrl+D, `cc -o hello hello.c` and `./hello`. `f77` compiles Fortran.\n* Games in `/usr/games`: `adventure`, `zork`, `hack`, `trek`, `rain`, `worms`, `wump`, `backgammon`, `fortune` and more (`ls /usr/games`).\n* Editors: Bill Joy's original `vi` and the Emacs-like `jove`; `man vi` shows the manual.\n* The front panel: turn the DATA knob to DATA PATHS. While 2.11BSD idles, its idle loop rotates a band of 8 lit bits through R0 before every WAIT, and the panel shows R0 during WAIT. Read the idle loop in `/usr/src/sys/pdp/mch_xxx.s` (search for `rdisply`).\n* The kernel configuration is `/usr/src/sys/conf/pidp`; the whole system source is in `/usr/src`.\n\n## Shut down\n\nAs root type `shutdown -h now`. 2.11BSD stops its daemons, syncs the disks, prints \"halting\" and halts the CPU (HALT instruction); then switch off. If you pull the plug instead, the next boot repairs the file systems (fsck) and reboots once by itself, which takes about 20 seconds longer.\n",
+  "notes": "## Log in\n\nLog in as **root** (no password); set a password with `passwd` if others can reach this machine.\n\nThe image comes with `rc_configured=NO` in `/etc/rc.conf`, which stops the automatic multi-user boot at a root shell. On the first boot the console therefore types one command by itself: it sets `rc_configured=YES` and `sendmail=NO` in `/etc/rc.conf` and reboots. No network address is configured and the machine has no network card.\n\nThe PDP-11/70 has no battery clock and there is no network, so the clock starts at the date stored on the disk (October 2026). Set it as root with `date yymmddhhmm`, e.g. `date 2610221530`.\n\n## Things to try\n\n* `uname -a`, `cat /VERSION`, `df`, `ps ax`, `who`: a BSD UNIX from 1992, patched until 2026.\n* Write a C program and compile it:\n\n  ```\n  cat > hello.c\n  main() { printf(\"hello, world\\n\"); }\n  ```\n\n  then Ctrl+D, `cc -o hello hello.c` and `./hello`. `f77` compiles Fortran.\n* Games in `/usr/games`: `adventure`, `zork`, `hack`, `trek`, `rain`, `worms`, `wump`, `backgammon`, `fortune` and more (`ls /usr/games`).\n* Editors: Bill Joy's original `vi` and the Emacs-like `jove`; `man vi` shows the manual.\n* The front panel: turn the DATA knob to DATA PATHS. While 2.11BSD idles, its idle loop rotates a band of 8 lit bits through R0 before every WAIT, and the panel shows R0 during WAIT. Read the idle loop in `/usr/src/sys/pdp/mch_xxx.s` (search for `rdisply`).\n* The kernel configuration is `/usr/src/sys/conf/pidp`; the whole system source is in `/usr/src`.\n\n## Shut down\n\nAs root type `shutdown -h now`. 2.11BSD stops its daemons, syncs the disks, prints \"halting\" and halts the CPU (HALT instruction); then switch off. If you pull the plug instead, the next boot repairs the file systems (fsck) and reboots once by itself, which takes about 35 seconds longer, up to a minute if the disks were being written (at Authentic speed 13 minutes: switch to Fast meanwhile). Files that were being written can be lost (`/lost+found`).\n",
   "cpu": {
     "memory": "4M"
   },
   "speed": "fast",
   "boot": "boot rq0",
   "readyPattern": "login: ",
-  "bootTimeoutSec": 90,
+  "bootTimeoutSec": 120,
   "console": {
     "backspace": "del",
     "interrupt": "ctrl-c",
@@ -55,14 +55,14 @@
     {
       "url": "ftp://ftp.dfupdate.se/pub/pdp11/2.11BSD/pidp-pl499.dsk.gz",
       "mirrors": [],
-      "sha256": "634d0626d898bdaa14070acd8671c09f5d587c8ed96b9e970f9f0806c40a8e7b",
-      "size": 47883044,
+      "sha256": "56516c667d99d2477c48c5fa2a7635c5bbf51349a39f945f71a63c3a68a4b898",
+      "size": 48140249,
       "format": "gz",
       "files": [
         {
           "path": "pidp-pl499.dsk",
           "role": "DISK0",
-          "sha256": "8e367779b51c0d246a283fb9772450d4ed8747892e764fcc2188c34b7e4eb8fe",
+          "sha256": "12102b83c0c9d807f760df4d2deba9563111455f3817b14c8def3777510cd860",
           "size": 1024458752,
           "sparse": true
         }
@@ -79,7 +79,7 @@
         "send": "uname -a\r"
       },
       {
-        "expect": "2.11 BSD UNIX #5"
+        "expect": "2.11 BSD UNIX #7"
       },
       {
         "expect": "# ",

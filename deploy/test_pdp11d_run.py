@@ -43,6 +43,7 @@ CASES = {
     "dollar": ("PDP11_PASSWORD=$ecretPass\nT_A=$HOME\nT_B=\"$HOME\"\nT_C='$HOME'\n",
                {"PDP11_PASSWORD": "$ecretPass", "T_A": "$HOME", "T_B": "$HOME", "T_C": "$HOME"}),
     "last wins": ("T_A=1\nT_A=2\n", {"T_A": "2"}),
+    "the script's own variables": ("bin=/nonexistent\nuser=root\nenv_file=/nonexistent\nT_A=1\n", {"T_A": "1"}),
     "README example": ("PDP11_PASSWORD='a$b\\c'\nT_FA=\"'self' https://dashboard.example.com\"\n",
                        {"PDP11_PASSWORD": "a$b\\c", "T_FA": "'self' https://dashboard.example.com"}),
 }
@@ -57,7 +58,7 @@ class EnvFileTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir)
         stub = os.path.join(self.dir, "pdp11d")
         with open(stub, "w") as f:
-            f.write("#!%s -I\nimport json, os, sys\njson.dump(dict(os.environ), sys.stdout)\n" % sys.executable)
+            f.write("#!%s -I\nimport json, os, sys\nu = os.umask(0)\njson.dump(dict(os.environ, UMASK=oct(u)), sys.stdout)\n" % sys.executable)
         os.chmod(stub, 0o755)
         with open(SCRIPT) as f:
             text = f.read()
@@ -91,8 +92,12 @@ class EnvFileTest(unittest.TestCase):
             shipped = f.read()
         got = self.environment(SHELLS[0], shipped)
         self.assertEqual({k: v for k, v in got.items() if k.startswith("PDP11_") and k != "PDP11_ENV_FILE"}, {
-            "PDP11_DATA": "/var/lib/pdp11", "PDP11_SHM": "/run/pdp11/panel", "PDP11_SHUTDOWN_ON_STOP": "1",
+            "PDP11_DATA": "/var/lib/pdp11",
+            # Not root: /run/pdp11 only if root made it, else pdp11d's default.
+            "PDP11_SHM": "/run/pdp11/panel" if os.access("/run/pdp11", os.W_OK) else "/dev/shm/pdp11d-panel",
+            "PDP11_SHUTDOWN_ON_STOP": "1",
             "PDP11_LISTEN": ":8080", "PDP11_PASSWORD": ""})
+        self.assertEqual(got["UMASK"], "0o27", "the unit's UMask=0027")
         got = self.environment(SHELLS[0], "PDP11_DATA=/srv/pdp11\nPDP11_SHUTDOWN_ON_STOP=0\n")
         self.assertEqual((got["PDP11_DATA"], got["PDP11_SHUTDOWN_ON_STOP"]), ("/srv/pdp11", "0"))
 

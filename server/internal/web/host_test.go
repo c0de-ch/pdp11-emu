@@ -110,9 +110,12 @@ func TestHostCheckRules(t *testing.T) {
 		"x.example.net":        true,
 		"a.b.example.net":      true,
 		"example.net":          false, // "*." means subdomains only
-		"pdp.example.com":      true,  // PDP11_ALLOW_ORIGINS host patterns
+		"evilexample.net":      false, // ... at a label boundary (anyone can register evilexample.net)
+		"a.evilexample.net":    false,
+		"pdp.example.com":      true, // PDP11_ALLOW_ORIGINS host patterns
 		"a.b.example.com":      true,
 		"example.com":          false,
+		"evilexample.com":      false,
 		"proxy.example.info":   true,
 		"pdp.example.org":      true,
 		"attacker.example":     false,

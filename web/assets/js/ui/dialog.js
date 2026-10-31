@@ -100,7 +100,7 @@ export function confirmStop({ what, system, state }) {
     const locked = state.controls?.key === 'lock';
     const how = `${locked ? 'turn the key to POWER, ' : ''}set ENABLE/HALT to ENABLE and press CONT`;
     const body = [
-      h('p', {}, `${name} is still in memory: the CPU was halted, not shut down. Turning it off now is like pulling the plug: the disks may need repair (fsck) at the next boot, and recent changes can be lost.`),
+      h('p', {}, `${name} is still in memory: the CPU was halted, not shut down. Turning it off now is like pulling the plug: the disks may need repair at the next boot, and recent changes can be lost.`),
       h('p', {}, system?.canShutdown ? `To shut it down cleanly, ${how}, then use Shut down OS.` : `To stop it cleanly, ${how} and do what it needs on the console first.`),
     ];
     if (system?.shutdown) body.push(h('div', { class: 'shutdown-text' }, h('strong', {}, system.canShutdown ? 'Clean shutdown: ' : 'Before you switch off: '), system.shutdown));
@@ -132,7 +132,7 @@ export function confirmStop({ what, system, state }) {
     }).promise;
   }
   const body = [
-    h('p', {}, `${name} is running. Turning it off without a clean shutdown is like pulling the plug: the disks may need repair (fsck) at the next boot, and recent changes can be lost.`),
+    h('p', {}, `${name} is running. Turning it off without a clean shutdown is like pulling the plug: the disks may need repair at the next boot, and recent changes can be lost.`),
   ];
   if (system.shutdown) body.push(h('div', { class: 'shutdown-text' }, h('strong', {}, 'Clean shutdown: '), system.shutdown));
   return openDialog({

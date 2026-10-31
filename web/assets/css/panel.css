@@ -64,6 +64,7 @@
   opacity: 0;
   will-change: opacity;
   pointer-events: none;
+  forced-color-adjust: none; /* Windows high contrast removes gradients: the lamps would vanish */
   background:
     radial-gradient(6.1% 6.1% at 35.37% 35.37%, rgb(255 255 255 / 0.4) 0%, rgb(255 255 255 / 0.4) 55%, rgb(255 255 255 / 0) 100%),
     radial-gradient(closest-side, #ff3b2a 0%, #e8001a 38%, #8a0010 62.6%,

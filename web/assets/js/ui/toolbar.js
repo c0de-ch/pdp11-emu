@@ -68,6 +68,15 @@ export class Toolbar {
       E.fast = h('button', { type: 'button', role: 'radio', 'aria-checked': 'false', onclick: () => app.setSpeed('fast'), title: 'Unthrottled; idles in WAIT' }, 'Fast');
       E.authentic = h('button', { type: 'button', role: 'radio', 'aria-checked': 'false', onclick: () => app.setSpeed('authentic'), title: 'About 1 MIPS, like a real 11/70' }, 'Authentic');
       E.speed = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'CPU speed' }, E.fast, E.authentic);
+      // a radio group is one tab stop; an arrow key chooses the other radio (they wrap)
+      E.speed.addEventListener('keydown', (e) => {
+        if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(e.key)) return;
+        e.preventDefault();
+        const next = e.target === E.fast ? E.authentic : E.fast;
+        if (next.disabled) return;
+        next.focus();
+        next.click();
+      });
       host.append(E.system, h('span', { class: 'sep' }), E.power, E.boot, E.shutdownWrap, h('span', { class: 'sep' }), E.speed);
     }
     host.append(h('span', { class: 'spacer' }));
@@ -140,6 +149,8 @@ export class Toolbar {
       const speed = st?.speed ?? sys?.speed;
       E.fast.setAttribute('aria-checked', String(speed === 'fast'));
       E.authentic.setAttribute('aria-checked', String(speed === 'authentic'));
+      E.fast.tabIndex = speed === 'authentic' ? -1 : 0;
+      E.authentic.tabIndex = speed === 'authentic' ? 0 : -1;
       E.fast.disabled = E.authentic.disabled = !connected;
     }
     this.updateStatus();

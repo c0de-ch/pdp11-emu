@@ -30,10 +30,10 @@ function loadPlaywright() {
   return null;
 }
 
-/** $CHROMIUM, else the newest Playwright headless shell or Chromium under ~/.cache/ms-playwright. */
+/** $CHROMIUM, else the newest Playwright headless shell or Chromium under $PLAYWRIGHT_BROWSERS_PATH (default ~/.cache/ms-playwright). */
 function findChromium() {
   if (process.env.CHROMIUM) return existsSync(process.env.CHROMIUM) ? process.env.CHROMIUM : null;
-  const root = join(homedir(), '.cache', 'ms-playwright');
+  const root = process.env.PLAYWRIGHT_BROWSERS_PATH || join(homedir(), '.cache', 'ms-playwright');
   if (!existsSync(root)) return null;
   const dirs = readdirSync(root).sort().reverse();
   for (const [prefix, rel] of [['chromium_headless_shell-', 'chrome-linux/headless_shell'], ['chromium-', 'chrome-linux/chrome']]) {
@@ -66,7 +66,7 @@ export const simhPath = process.env.PDP11_SIMH || join(REPO, 'simh', 'out', 'pdp
 /** Why the suite cannot run here (node:test skip reason), or false. */
 export const skip = Number(process.versions.node.split('.')[0]) < 20 ? 'needs Node 20 or newer'
   : !pw ? 'playwright-core not found (set PLAYWRIGHT_CORE to a node_modules dir that has it)'
-    : !chromiumPath ? 'no Chromium found (set CHROMIUM, or install a Playwright Chromium in ~/.cache/ms-playwright)'
+    : !chromiumPath ? 'no Chromium found (set CHROMIUM, or install a Playwright Chromium in $PLAYWRIGHT_BROWSERS_PATH or ~/.cache/ms-playwright)'
       : !goPath ? 'go not found (set GO)'
         : !existsSync(simhPath) ? `patched SimH not found at ${simhPath} (run simh/build.sh or set PDP11_SIMH)`
           : process.platform !== 'linux' ? 'pdp11d runs on Linux only'

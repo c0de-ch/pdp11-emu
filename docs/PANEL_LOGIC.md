@@ -155,9 +155,15 @@ EXAM and DEP do nothing.
   text after the last newline of the history) — then **waits 250 ms** (RSX and
   RSTS post their terminal read late) and types Send. The `step` texts are
   readable: `Waiting for “<expect>”`, `Typing “<send>”` (`Pressing Return` for
-  a bare line end) and `Waiting for the system to halt…`; line ends are
-  dropped, other control characters shown as `^X`, blanks around them trimmed
-  (the raw strings go to the debug log). Then:
+  a bare line end), `Waiting for the system to halt…` (also during the 3 s
+  settle of an expect-only script) and, for the `shutdownOS` input, `Powering
+  off` before the power off; line ends are dropped, other control characters
+  shown as `^X`, blanks around them trimmed (the raw strings go to the debug
+  log). A prompt that does not appear is logged at warn with the console's last
+  line, in the same form. A boot the panel started that has not reached its
+  ready prompt comes first: what is typed before the prompt is lost, so the
+  shutdown waits up to 25 s for it (`Waiting for the system to finish booting…`).
+  Then:
   * last step has a Send → wait ≤ 30 s for the CPU to stop (the OS halts
     itself, `HALT instruction`); on timeout toast (`warn`, to everyone, with the
     request's `req`) the reason plus "Pull the plug (turn the key to OFF) only if
