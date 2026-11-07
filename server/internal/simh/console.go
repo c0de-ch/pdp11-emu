@@ -296,6 +296,16 @@ func (c *console) SubscribeHistory(fn func(p []byte)) ([]byte, func()) {
 	}
 }
 
+// Reset implements api.Stream.
+func (c *console) Reset() {
+	c.hmu.Lock()
+	defer c.hmu.Unlock()
+	c.hpos, c.hfull = 0, false
+	for _, s := range c.subs {
+		s.fn([]byte("\x1bc"))
+	}
+}
+
 // Connected implements api.Stream.
 func (c *console) Connected() bool {
 	c.mu.Lock()

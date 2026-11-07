@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"pdp11emu/server/internal/web"
 )
 
 func envMap(m map[string]string) func(string) string {
@@ -280,6 +282,51 @@ func TestServeBusyPort(t *testing.T) {
 	}
 }
 
+// TestServeInvalidSettings: an invalid setting ends serve with status 2, the
+// status the systemd unit does not restart on, with a message naming the
+// setting and before the data directory is touched.
+func TestServeInvalidSettings(t *testing.T) {
+	for _, tc := range []struct{ name, env, value string }{
+		{"host with a port", "PDP11_HOSTS", "pdp11.lan:8080"},
+		{"host with a scheme", "PDP11_HOSTS", "good.lan,http://pdp11.lan"},
+		{"proxy that is a name", "PDP11_TRUSTED_PROXIES", "proxy.lan"},
+		{"proxy with a bad prefix", "PDP11_TRUSTED_PROXIES", "10.0.0.1,10.0.0.0/33"},
+		{"keyword without quotes", "PDP11_FRAME_ANCESTORS", "self"},
+		{"another CSP directive", "PDP11_FRAME_ANCESTORS", "'self'; script-src *"},
+		{"bad origin pattern", "PDP11_ALLOW_ORIGINS", "[pdp11.lan"},
+		{"UI directory without index.html", "PDP11_WEB", "/nonexistent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := filepath.Join(t.TempDir(), "data")
+			env := map[string]string{"PDP11_DATA": data, "PDP11_LISTEN": "127.0.0.1:0", "PDP11_SIMH": "/nonexistent",
+				"PDP11_SHM": filepath.Join(t.TempDir(), "panel"), "PDP11_CACHE": t.TempDir(), tc.env: tc.value}
+			var logs syncBuffer
+			if code := run([]string{"serve"}, envMap(env), io.Discard, &logs); code != 2 || !strings.Contains(logs.String(), tc.env) {
+				t.Fatalf("exit %d, want 2 naming %s:\n%s", code, tc.env, logs.String())
+			}
+			if _, err := os.Lstat(data); !os.IsNotExist(err) {
+				t.Fatalf("the data directory was created (%v):\n%s", err, logs.String())
+			}
+		})
+	}
+	t.Run("flags count too, and every bad setting is named", func(t *testing.T) {
+		data := filepath.Join(t.TempDir(), "data")
+		env := map[string]string{"PDP11_DATA": data, "PDP11_LISTEN": "127.0.0.1:0", "PDP11_SHM": filepath.Join(t.TempDir(), "panel"), "PDP11_HOSTS": "a:1"}
+		var logs syncBuffer
+		code := run([]string{"serve", "--trusted-proxies", "proxy.lan"}, envMap(env), io.Discard, &logs)
+		if code != 2 || !strings.Contains(logs.String(), "PDP11_HOSTS") || !strings.Contains(logs.String(), "PDP11_TRUSTED_PROXIES") {
+			t.Fatalf("exit %d:\n%s", code, logs.String())
+		}
+		if _, err := os.Lstat(data); !os.IsNotExist(err) {
+			t.Fatalf("the data directory was created (%v)", err)
+		}
+	})
+	// The defaults and the values compose.yaml passes for an empty .env are fine.
+	if err := web.CheckOptions(web.Options{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // ---- end to end with the real simulator --------------------------------------
 
 func e2eSetup(t *testing.T) (env map[string]string, base string) {
@@ -412,6 +459,7 @@ func TestServeShutdownOnStop(t *testing.T) {
 	}
 	sys["default"] = true
 	sys["shutdownScript"] = []map[string]any{
+		{"ifLineEnds": []string{"\nlogin: "}, "else": "not at the login prompt"},
 		{"expect": "login: ", "send": "root\r"},
 		{"expect": "# ", "send": "sync\r"},
 		{"expect": "# "},

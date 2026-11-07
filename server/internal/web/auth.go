@@ -161,7 +161,7 @@ func parseProxies(list []string) ([]netip.Prefix, error) {
 		if err != nil {
 			a, aerr := netip.ParseAddr(s)
 			if aerr != nil {
-				return nil, fmt.Errorf("web: PDP11_TRUSTED_PROXIES: %q is not an IP address or CIDR", s)
+				return nil, fmt.Errorf("PDP11_TRUSTED_PROXIES: %q is not an IP address or CIDR", s)
 			}
 			a = a.Unmap().WithZone("")
 			p = netip.PrefixFrom(a, a.BitLen())

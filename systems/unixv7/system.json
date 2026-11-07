@@ -17,32 +17,23 @@
       "password": "root"
     }
   ],
-  "shutdown": "V7 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you: it first types root, which logs in at login: and is harmless at a shell prompt; leave any program first.",
+  "shutdown": "V7 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you from the login: prompt or a shell prompt: it logs in as root, after logging out another user's idle shell. While a program uses the console it types nothing and says so: leave the program first.",
   "shutdownScript": [
-    {
-      "send": "root\r"
-    },
-    {
-      "expect": ":",
-      "send": "root\r"
-    },
-    {
-      "expect": "# ",
-      "send": "sync\r"
-    },
-    {
-      "expect": "# ",
-      "send": "sync\r"
-    },
-    {
-      "expect": "# ",
-      "send": "sync\r"
-    },
-    {
-      "expect": "# "
-    }
+    {"ifLineEnds": ["\nlogin: *", "\n# ", "\n$ "], "else": "the console is not at a shell or login: prompt, so nothing was typed. A program may be using it, or a command may be half typed: leave the program (ed: q), or clear the line (@), press Return for a fresh prompt and try again."},
+    {"ifLineEnds": ["\n$ "], "send": "\u0004"},
+    {"expectAny": ["login: ", "# "], "timeoutSec": 15, "else": "the user logged in on the console did not log out: log out by hand (Ctrl+D), then try again."},
+    {"ifLineEnds": ["\nlogin: "], "send": "root\r"},
+    {"ifLineEnds": ["\nlogin: *"], "send": "@root\r"},
+    {"expectAny": ["# ", "Password:"]},
+    {"ifLineEnds": ["Password:"], "send": "root\r"},
+    {"expectAny": ["# ", "Login incorrect"]},
+    {"ifLineEnds": ["# "], "else": "the root password is not the one this system comes with: log in as root by hand, then try again."},
+    {"expect": "# ", "send": "sync\r"},
+    {"expect": "# ", "send": "sync\r"},
+    {"expect": "# ", "send": "sync\r"},
+    {"expect": "# "}
   ],
-  "notes": "## Log in\n\nLog in as **root**, password **root**. The terminal settings are from 1979: **#** erases the last character and **@** kills the line (the console's Backspace key sends # for you), DEL interrupts (Ctrl+C sends DEL) and Ctrl+D ends input. Type `\\#` or `\\@` for the characters themselves (`\\#include`).\n\nThe boot sets the clock (the PDP-11/70 has no battery clock). V7 only knows 19xx years, so the year is the 19xx year whose calendar matches today's.\n\n## Things to try\n\n* `ls -l /`, `ps ax`, `who`, `cal 7 1979`, `bc`, `dc`, `units`, `awk`.\n* Compile C: `cat > hello.c`, type `main() { printf(\"hello, world\\n\"); }`, press Ctrl+D, then `cc hello.c` and `./a.out`.\n* Games in `/usr/games`: `chess`, `backgammon`, `wump` (hunt the wumpus), `ttt`, `bj`, `moo`, `quiz`, `hangman`, `cubic`, `maze`, `reversi`, `checkers`, `ching` and `fortune`.\n* The display register: on every clock tick V7 copies one word of kernel memory into the console's DISPLAY REGISTER, the word whose address is set in the switch register. Turn the DATA knob to DISPLAY REGISTER and set the switches to 004244: the DATA lamps show the kernel's tick counter `lbolt` counting through each second; 004250 shows the low word of the time, one count per second. `nm /unix` lists the other kernel variables.\n* The kernel source is in `/usr/sys`, the commands in `/usr/src/cmd`.\n\n## Shut down\n\nThere is no shutdown or halt command: type `sync` three times, wait a few seconds for the disk writes to finish and switch off.\n",
+  "notes": "## Log in\n\nLog in as **root**, password **root**. The terminal settings are from 1979: **#** erases the last character and **@** kills the line (the console's Backspace key sends # for you), DEL interrupts (Ctrl+C sends DEL) and Ctrl+D ends input. Type `\\#` or `\\@` for the characters themselves (`\\#include`).\n\nThe boot sets the clock (the PDP-11/70 has no battery clock). V7 only knows 19xx years, so the year is the 19xx year whose calendar matches today's.\n\n## Things to try\n\n* `ls -l /`, `ps ax`, `who`, `cal 7 1979`, `bc`, `dc`, `units`, `awk`.\n* Compile C: `cat > hello.c`, type `main() { printf(\"hello, world\\n\"); }`, press Ctrl+D, then `cc hello.c` and `./a.out`.\n* Games in `/usr/games`: `chess`, `backgammon`, `wump` (hunt the wumpus), `ttt`, `bj`, `moo`, `quiz`, `hangman`, `cubic`, `maze`, `reversi`, `checkers`, `ching` and `fortune`.\n* The display register: on every clock tick V7 copies one word of kernel memory into the console's DISPLAY REGISTER, the word whose address is set in the switch register. Turn the DATA knob to DISPLAY REGISTER and set the switches to 004244: the DATA lamps show the kernel's tick counter `lbolt` counting through each second; 004250 shows the low word of the time, one count per second. `nm /unix` lists the other kernel variables.\n* The kernel source is in `/usr/sys`, the commands in `/usr/src/cmd`.\n\n## Shut down\n\nThere is no shutdown or halt command: type `sync` three times, wait a few seconds for the disk writes to finish and switch off.\n\n**Shut down OS** does this for you. It starts from the `login:` prompt (a half-typed name is cleared), from a root shell, or from another user's shell, which it logs out first. It never types into a program: with `ed` open, a half-typed command or anything else but a prompt on the last line it stops at once and says what to do (a stop of the service or container then powers off uncleanly).\n",
   "cpu": {
     "memory": "2M"
   },

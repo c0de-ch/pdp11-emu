@@ -337,11 +337,13 @@ func shell(e *env, haltAfter time.Duration) {
 }
 
 func shortShutdown(t *testing.T) {
-	old := [4]time.Duration{defaultStepTimeout, haltAfterScript, settleAfterScript, readyBeforeScript}
+	old := [6]time.Duration{defaultStepTimeout, haltAfterScript, settleAfterScript, readyBeforeScript, consoleQuiet, consoleQuietMax}
 	defaultStepTimeout, haltAfterScript, settleAfterScript = time.Second, 300*time.Millisecond, 100*time.Millisecond
 	readyBeforeScript = 0
+	consoleQuiet, consoleQuietMax = 30*time.Millisecond, 300*time.Millisecond
 	t.Cleanup(func() {
 		defaultStepTimeout, haltAfterScript, settleAfterScript, readyBeforeScript = old[0], old[1], old[2], old[3]
+		consoleQuiet, consoleQuietMax = old[4], old[5]
 	})
 }
 
@@ -401,6 +403,25 @@ func TestShutdownOS(t *testing.T) {
 		}
 		if got, want := scriptText(" \x03halt\x7f\r\n "), "^Chalt^?"; got != want {
 			t.Fatalf("scriptText = %q, want %q", got, want)
+		}
+	})
+	t.Run("progress texts of a script that checks the console", func(t *testing.T) {
+		shortShutdown(t)
+		e := runningEnv(t)
+		e.m.SetReady(true)
+		e.sys.SetScript("bsd211", guardedScript())
+		e.m.Stream().EmitString("\r\n\rlogin: ")
+		fakeUnix(e, nil)
+		e.do("shutdown")
+		var texts []string
+		for _, p := range e.progressList() {
+			texts = append(texts, p.Text)
+		}
+		want := []string{"Checking the console…", "Waiting for the console…", "Typing “root”", "Waiting for the console…",
+			"Waiting for “#”", "Typing “sync”", "Waiting for “#”", "Typing “shutdown -h now”",
+			"Waiting for the system to halt…", "Powering off", "The OS has shut down; power is off."}
+		if !slices.Equal(texts, want) {
+			t.Fatalf("progress texts %q, want %q", texts, want)
 		}
 	})
 	t.Run("the first expect matches a prompt already on screen", func(t *testing.T) {
@@ -530,6 +551,319 @@ func TestShutdownOS(t *testing.T) {
 			t.Fatalf("boot during shutdown: hint %q", h)
 		}
 	})
+}
+
+// TestConsoleTail: console output as a condition sees it, and what a text
+// matches at its end. bootmatrix.py has the same cases.
+func TestConsoleTail(t *testing.T) {
+	for _, tt := range []struct{ raw, want string }{
+		{"", "\n"},
+		{"2.11 BSD UNIX\r\n\r\r\n\rlogin: ", "\n2.11 BSD UNIX\nlogin: "},
+		{"\x15\r       \rlogin: ", "\n       \nlogin: "},
+		{"@unix\r\n\n\r\x1b;\x07login: ", "\n@unix\nlogin: "},
+		{"abc\b \b", "\nab"},
+		{"# ab\b \b\b \b", "\n# "},
+		{"cat\r\n^D\b\b# ", "\ncat\n# "},
+		{"TIM\r\n>\x00", "\nTIM\n>"},
+		{"Ready\r\n\n", "\nReady\n"},
+		{":q!\r\x1bD\x1b[?1l\x1b># ", "\n:q!\n# "},
+		{"JOVE\x1b[m\x1b[H\x1b[?1l\x1b>\x1b[24;1H\x1b[K# ", "\nJOVE\n# "},
+		{"[New file]\x1b[H", "\n[New file]\n"},
+		{"cut off\x1b", "\ncut off"},
+		{"cut off\x1b[2", "\ncut off"},
+	} {
+		if got := consoleTail([]byte(tt.raw)); got != tt.want {
+			t.Errorf("consoleTail(%q) = %q, want %q", tt.raw, got, tt.want)
+		}
+	}
+	for _, tt := range []struct {
+		tail, text string
+		want       bool
+	}{
+		{"\nlogin: ", "login: ", true},
+		{"\nlogin: ", "\nlogin: ", true},
+		{"\nLast login: ", "\nlogin: ", false},
+		{"\nlogin: fo", "login: ", false},
+		{"\nlogin: fo", "\nlogin: *", true},
+		{"\nlogin: ", "\nlogin: *", true},
+		{"\nlogin: fo\n", "\nlogin: *", false},
+		{"\nlogin: a\nb", "\nlogin: *", false},
+		{"\n# ", "\n# ", true},
+		{"\nhello # ", "\n# ", false},
+		{"\nhello # ", "# ", true},
+		{"\nuser[12] ", "\nuser[*] ", true},
+		{"\nuser[12] x", "\nuser[*] ", false},
+		{"\nremove? [y/n] ", "\nuser[*] ", false},
+		{"\nReady\n", "Ready\n", true},
+		{"\nReady\nPRI", "Ready\n", false},
+		{"\nGood evening\n", "Good *\n", true},
+		{"\nGood\nmorning\n", "Good *\n", false},
+		{"\n>", "\n>", true},
+		{"\nPIP>", "\n>", false},
+		{"\n>HELLO U", "\n>HEL*", true},
+	} {
+		if got := tailEndsIn(tt.tail, tt.text); got != tt.want {
+			t.Errorf("tailEndsIn(%q, %q) = %v, want %v", tt.tail, tt.text, got, tt.want)
+		}
+	}
+}
+
+// guardedScript has the shape of the 2.11BSD script of the catalog.
+func guardedScript() []api.ScriptStep {
+	const atLogin, shells = "\nlogin: *", "\n$ "
+	return []api.ScriptStep{
+		{IfLineEnds: []string{atLogin, "\n# ", shells}, Else: "not at a prompt: leave the program."},
+		{IfLineEnds: []string{shells}, Send: "\x04"},
+		{ExpectAny: []string{"login: ", "# ", "suspended jobs"}, TimeoutSec: 1, Else: "did not log out: log out by hand."},
+		{IfLineEnds: []string{atLogin, "# "}, Else: "suspended jobs: end them."},
+		{IfLineEnds: []string{"\nlogin: "}, Send: "root\r"},
+		{IfLineEnds: []string{atLogin}, Send: "\x15root\r"},
+		{ExpectAny: []string{"# ", "Password:"}},
+		{IfLineEnds: []string{"# "}, Else: "a password: log in by hand."},
+		{Expect: "# ", Send: "sync\r"},
+		{Expect: "# ", Send: "shutdown -h now\r"},
+	}
+}
+
+// fakeUnix answers on the fake console like the guest: what to print for a
+// typed text (nil: an echo and the prompt "# ").
+func fakeUnix(e *env, replies map[string]string) {
+	s := e.m.Stream()
+	s.OnWrite = func(p []byte) {
+		in := string(p)
+		if r, ok := replies[in]; ok {
+			s.EmitString(r)
+			return
+		}
+		s.EmitString(strings.ReplaceAll(in, "\r", "\r\n"))
+		if strings.HasPrefix(in, "shutdown -h now") {
+			s.EmitString("halting\r\n")
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				e.m.StopCPU("HALT instruction", 0o14)
+			}()
+			return
+		}
+		s.EmitString("# ")
+	}
+}
+
+// TestShutdownConsoleStates: the script looks at the console before it types,
+// recovers where that is safe and otherwise fails at once, having typed nothing.
+func TestShutdownConsoleStates(t *testing.T) {
+	const down = "sync\rshutdown -h now\r"
+	for _, tt := range []struct {
+		name    string
+		screen  string
+		replies map[string]string
+		typed   string
+		reason  string // the failure text; empty: a clean shutdown
+	}{
+		{name: "login prompt", screen: "2.11 BSD UNIX\r\n\r\r\n\rlogin: ", typed: "root\r" + down},
+		{name: "login prompt after a kill", screen: "login: fo\x15\r     \rlogin: ", typed: "root\r" + down},
+		{name: "half-typed login name", screen: "\r\n\rlogin: fo", typed: "\x15root\r" + down},
+		{name: "erased login name", screen: "\r\n\rlogin: xy\b \b\b \b", typed: "root\r" + down},
+		{name: "root shell", screen: "login: root\r\n# ", typed: down},
+		{name: "root shell after a program", screen: ":q!\r\x1bD\x1b[?1l\x1b># ", typed: down},
+		{name: "login prompt with a syslog line after it", screen: "\r\n\rlogin: Mar 30 02:31:38 pdp11 March 30 02:31:38 login: ROOT LOGIN ON tty00\r\r\n", typed: "root\r" + down},
+		{name: "half-typed login name with a syslog line after it", screen: "\r\n\rlogin: foMar 30 02:31:38 pdp11 unix: ra0: hello\r\r\n", typed: "\x15root\r" + down},
+		{name: "root shell with a syslog line after it", screen: "\r\n# Mar 30 02:41:54 pdp11 March 30 02:41:54 login: ROOT LOGIN ON console\r\r\n", typed: down},
+		{name: "root shell with two syslog lines after it", screen: "\r\n# Mar 30 02:41:54 pdp11 a: 1\r\r\nOct  7 02:41:55 pdp11 b: 2\r\r\n", typed: down},
+		{name: "half-typed command with a syslog line after it", screen: "\r\n# rm -rf /usMar 30 02:41:54 pdp11 a: 1\r\r\n", reason: "not at a prompt: leave the program."},
+		{name: "text typed after a syslog line", screen: "\r\n# Mar 30 02:41:54 pdp11 a: 1\r\r\nls", reason: "not at a prompt: leave the program."},
+		{name: "another program's message after a prompt", screen: "\r\n# wall: hello\r\n", reason: "not at a prompt: leave the program."},
+		{name: "a program printing such lines", screen: "# tail -f /usr/adm/messages\r\nMar 30 02:41:54 pdp11 a: 1\r\n", reason: "not at a prompt: leave the program."},
+		{name: "another user's shell", screen: "login: user\r\n$ ", typed: "\x04root\r" + down,
+			replies: map[string]string{"\x04": "\r\n\rlogin: "}},
+		{name: "another user with a suspended job", screen: "Suspended\r\n$ ", typed: "\x04", reason: "suspended jobs: end them.",
+			replies: map[string]string{"\x04": "^D\b\b\r\nThere are suspended jobs.\r\n$ "}},
+		{name: "another user who does not log out", screen: "\r\n$ ", typed: "\x04", reason: "did not log out: log out by hand.",
+			replies: map[string]string{"\x04": "Use \"logout\" to logout.\r\n$ "}},
+		{name: "a password asked after root", screen: "\r\n\rlogin: ", typed: "root\r", reason: "a password: log in by hand.",
+			replies: map[string]string{"root\r": "root\r\nPassword:"}},
+		{name: "inside vi", screen: "\x1b[H\x1b[J\n~\n\b~\x1b[H\x1b[24;1H\"/tmp/x\" [New file]\x1b[H", reason: "not at a prompt: leave the program."},
+		{name: "inside vi, typing", screen: "\x1b[H\x1b[4hhello # ", reason: "not at a prompt: leave the program."},
+		{name: "half-typed command", screen: "\r\n# ls /us", reason: "not at a prompt: leave the program."},
+		{name: "a program without a prompt", screen: "# cat\r\nabc\r\n", reason: "not at a prompt: leave the program."},
+		{name: "a password prompt", screen: "\r\n$ su\r\nPassword:", reason: "not at a prompt: leave the program."},
+		{name: "an empty console", screen: "", reason: "not at a prompt: leave the program."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			shortShutdown(t)
+			defaultStepTimeout = time.Minute // what a refusal must not wait for
+			e := runningEnv(t)
+			e.m.SetReady(true)
+			e.sys.SetScript("bsd211", guardedScript())
+			fakeUnix(e, tt.replies)
+			e.m.Stream().EmitString(tt.screen)
+			start := time.Now()
+			e.do("shutdown")
+			took := time.Since(start)
+			if got := string(e.m.Stream().Input()); got != tt.typed {
+				t.Errorf("typed %q, want %q", got, tt.typed)
+			}
+			if tt.reason == "" {
+				if st := e.m.State(); st != api.RunOff || e.key() != keyOff {
+					t.Errorf("state %s key %s", st, e.key())
+				}
+				if ts := e.toastList(); len(ts) != 0 {
+					t.Errorf("toasts %q", ts)
+				}
+				return
+			}
+			if took > 10*time.Second {
+				t.Errorf("the refusal took %s", took)
+			}
+			if st := e.m.State(); st != api.RunRunning || e.key() != keyPower {
+				t.Errorf("state %s key %s", st, e.key())
+			}
+			ts := e.toastList()
+			if len(ts) != 1 || !strings.HasPrefix(ts[0], "warn:") || !strings.Contains(ts[0], "Shut down OS: "+tt.reason) || !strings.Contains(ts[0], "Pull the plug") {
+				t.Errorf("toasts %q", ts)
+			}
+			if got := phases(e.progressList()); got[len(got)-1] != "error" {
+				t.Errorf("phases %q", got)
+			}
+		})
+	}
+}
+
+// The console is judged only once it has stopped printing.
+func TestShutdownJudgesAQuietConsole(t *testing.T) {
+	t.Run("a prompt on its way counts", func(t *testing.T) {
+		shortShutdown(t)
+		consoleQuiet, consoleQuietMax = time.Second, 10*time.Second
+		e := runningEnv(t)
+		e.m.SetReady(true)
+		e.sys.SetScript("bsd211", guardedScript())
+		fakeUnix(e, nil)
+		e.m.Stream().EmitString("# ls\r\n")
+		e.input(api.PanelInput{Kind: "shutdownOS"})
+		if !paneltest.WaitFor(5*time.Second, func() bool { return e.m.Stream().Subscribers() > 0 }) {
+			t.Fatal("the shutdown did not start")
+		}
+		time.Sleep(50 * time.Millisecond)
+		e.m.Stream().EmitString("file1\r\n")
+		time.Sleep(50 * time.Millisecond)
+		e.m.Stream().EmitString("# ")
+		e.idle()
+		if got := string(e.m.Stream().Input()); got != "sync\rshutdown -h now\r" {
+			t.Fatalf("typed %q", got)
+		}
+		if st := e.m.State(); st != api.RunOff {
+			t.Fatalf("state %s", st)
+		}
+	})
+	t.Run("a console that never stops is judged as it is", func(t *testing.T) {
+		shortShutdown(t)
+		consoleQuiet, consoleQuietMax = 500*time.Millisecond, 1500*time.Millisecond
+		e := runningEnv(t)
+		e.m.SetReady(true)
+		e.sys.SetScript("bsd211", guardedScript())
+		e.m.Stream().EmitString("# ")
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				case <-time.After(10 * time.Millisecond):
+					e.m.Stream().EmitString("line\r\n")
+				}
+			}
+		}()
+		start := time.Now()
+		e.do("shutdown")
+		if d := time.Since(start); d < consoleQuietMax || d > 10*time.Second {
+			t.Fatalf("judged after %s", d)
+		}
+		if got := e.m.Stream().Input(); len(got) != 0 {
+			t.Fatalf("typed %q", got)
+		}
+		if ts := e.toastList(); len(ts) != 1 || !strings.Contains(ts[0], "not at a prompt") {
+			t.Fatalf("toasts %q", ts)
+		}
+	})
+	t.Run("the HALT switch during the wait cancels", func(t *testing.T) {
+		shortShutdown(t)
+		consoleQuiet, consoleQuietMax = 5*time.Second, 10*time.Second
+		e := runningEnv(t)
+		e.m.SetReady(true)
+		e.sys.SetScript("bsd211", guardedScript())
+		e.m.Stream().EmitString("# ")
+		e.input(api.PanelInput{Kind: "shutdownOS"})
+		if !paneltest.WaitFor(5*time.Second, func() bool { return e.m.Stream().Subscribers() > 0 }) {
+			t.Fatal("the shutdown did not start")
+		}
+		start := time.Now()
+		e.do("halt")
+		if d := time.Since(start); d > 4*time.Second {
+			t.Fatalf("the HALT took %s", d)
+		}
+		if got := phases(e.progressList()); got[len(got)-1] != "cancelled" {
+			t.Fatalf("phases %q", got)
+		}
+		if got := e.m.Stream().Input(); len(got) != 0 {
+			t.Fatalf("typed %q", got)
+		}
+	})
+}
+
+// A daemon stop gets the reason as its error, in time to power off: the caller
+// logs it at warn. ShutdownOS itself changes nothing.
+func TestShutdownOSForDaemonStopRefused(t *testing.T) {
+	shortShutdown(t)
+	defaultStepTimeout = time.Minute
+	e := runningEnv(t)
+	e.m.SetReady(true)
+	e.sys.SetScript("bsd211", guardedScript())
+	e.m.Stream().EmitString("\x1b[H\x1b[4hhello")
+	e.stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	start := time.Now()
+	err := e.p.ShutdownOS(ctx)
+	if err == nil || !strings.Contains(err.Error(), "not at a prompt: leave the program.") {
+		t.Fatalf("err %v", err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("took %s", d)
+	}
+	if got := e.m.Stream().Input(); len(got) != 0 {
+		t.Fatalf("typed %q", got)
+	}
+	if st := e.m.State(); st != api.RunRunning || e.key() != keyPower || e.m.Count("PowerOff") != 0 {
+		t.Fatalf("state %s key %s, PowerOff %d", st, e.key(), e.m.Count("PowerOff"))
+	}
+}
+
+// What the first step of a script may read: the end of the history, and it
+// does not take an old line for a prompt.
+func TestConsoleWatchHistory(t *testing.T) {
+	shortShutdown(t)
+	e := runningEnv(t)
+	e.m.Stream().EmitString("Ready\r\n\n")
+	w := watchConsole(e.m.Stream())
+	defer w.close()
+	if !w.lineEnds([]string{"Ready\n"}) {
+		t.Fatal("the last line with text does not count")
+	}
+	if _, ok := w.find(w.start, "Ready"); ok {
+		t.Fatal("a wait saw an old line")
+	}
+	e.m.Stream().EmitString("PRI")
+	if !paneltest.WaitFor(time.Second, func() bool { return !w.lineEnds([]string{"Ready\n"}) }) {
+		t.Fatal("text after the prompt does not count")
+	}
+	// A long history: only its end is kept.
+	s2 := runningEnv(t).m.Stream()
+	s2.EmitString(strings.Repeat("x", 3*tailKeep) + "\r\n> ")
+	w2 := watchConsole(s2)
+	defer w2.close()
+	if _, ok := w2.find(w2.start, "\n> "); !ok || !w2.lineEnds([]string{"\n> "}) {
+		t.Fatal("the end of a long history is lost")
+	}
 }
 
 // A prompt that does not appear: the log says what the console showed, in the

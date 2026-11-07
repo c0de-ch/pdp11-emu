@@ -22,6 +22,7 @@ data
 # development tooling and research material, not needed to build the image
 web/dev/node_modules
 docs/research
+docs/img
 tests/**/node_modules
 tests/**/out
 **/__pycache__

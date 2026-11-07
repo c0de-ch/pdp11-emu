@@ -110,6 +110,16 @@ func (s *Stream) Emit(p []byte) {
 // EmitString is Emit for text.
 func (s *Stream) EmitString(text string) { s.Emit([]byte(text)) }
 
+// Reset implements api.Stream.
+func (s *Stream) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hist = nil
+	for _, fn := range s.subs {
+		fn([]byte("\x1bc"))
+	}
+}
+
 // SetConnected sets what Connected returns (Write fails while false).
 func (s *Stream) SetConnected(c bool) {
 	s.mu.Lock()

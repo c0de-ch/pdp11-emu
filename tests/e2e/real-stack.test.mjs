@@ -27,7 +27,7 @@ import {
   outputIn, outputOf, point, pressPaddle, shot, sleep, state, typeLine, typeSR, waitConsole, waitFor, waitPrompt, waitState, watchCSP, watchErrors,
 } from './lib/ui.mjs';
 
-// UI.md §6 (R7): the light chaser at 001000
+// UI.md §6: the light chaser at 001000
 const PROGRAM = [0o012700, 0o000001, 0o010037, 0o177570, 0o000240, 0o077101, 0o006100, 0o000772];
 // Chromium reports refused WebSocket connections while pdp11d restarts, and
 // the api/status request the UI makes before reconnecting (PROTOCOL.md)
@@ -84,9 +84,12 @@ describe('real stack: pdp11d + SimH + web UI in Chromium', { skip }, () => {
         if (o !== overlay) rec.overlay.push({ t: Date.now(), text: (overlay = o) });
         const b = document.querySelector('.ready-banner')?.textContent ?? '';
         if (b !== banner && (banner = b)) rec.banners.push({ t: Date.now(), text: b });
-        for (const el of document.querySelectorAll('.toast:not([data-e2e])')) {
-          el.dataset.e2e = '1';
-          rec.toasts.push({ t: Date.now(), level: el.className, text: el.querySelector('.toast-text')?.textContent ?? '' });
+        // every text of a toast: the OS shutdown's updates one toast in place
+        for (const el of document.querySelectorAll('.toast')) {
+          const text = el.querySelector('.toast-text')?.textContent ?? '';
+          if (el.dataset.e2e === text) continue;
+          el.dataset.e2e = text;
+          rec.toasts.push({ t: Date.now(), level: el.className, text });
         }
       }, 40);
     });
@@ -444,9 +447,26 @@ describe('real stack: pdp11d + SimH + web UI in Chromium', { skip }, () => {
     await shot(pp, cfg.shots, `f-popout-panel-${vw}x800`);
     assert.deepEqual(pp.errors, []);
     await pp.close();
-    // Shut down OS from the toolbar: 2.11BSD halts itself, then power and key go off
+    // Shut down OS from the toolbar: with vi on the console it types nothing and
+    // says so at once, and the machine stays on
     const btn = page.locator('.toolbar button:has-text("Shut down")');
     assert.ok(await btn.isEnabled(), 'Shut down OS enabled while 2.11BSD runs');
+    await typeLine(page, 'root');
+    await waitPrompt(page);
+    await typeLine(page, 'vi /tmp/e2e-file');
+    await waitConsole(page, /\[New file\]/);
+    await sleep(500);
+    const screen = await consoleText(page);
+    const refused = Date.now();
+    await btn.click();
+    const warned = () => page.evaluate((t0) => window.__e2e.toasts.filter((x) => x.t >= t0 && /so nothing was typed/.test(x.text)).map((x) => x.level), refused);
+    await waitFor(async () => (await warned()).length > 0, { timeout: 10000, message: 'the warning that nothing was typed' });
+    assert.match((await warned())[0], /toast-warn/);
+    assert.equal(await consoleText(page), screen, 'nothing typed into vi');
+    assert.equal((await state(page)).run, 'running', 'the machine stays on');
+    await typeLine(page, ':q!');
+    await waitPrompt(page);
+    // At the shell it goes on: 2.11BSD halts itself, then power and key go off
     const sd = Date.now();
     await btn.click();
     await waitState(page, (s) => s.run === 'off' && s.power === 'off' && s.controls.key === 'off', { timeout: 120000, interval: 200, message: 'shut down: off, key OFF' });
@@ -553,8 +573,9 @@ describe('real stack: pdp11d + SimH + web UI in Chromium', { skip }, () => {
     await waitFor(async () => (await actions()).includes('plug'), { message: 'switch confirmation' });
     assert.deepEqual(await actions(), ['cancel', 'plug', 'shutdown'], '2.11BSD offers a clean shutdown');
     await top().locator('[data-value="plug"]').click();
-    await page.keyboard.press('Escape'); // the chooser
+    await page.waitForSelector('dialog.dialog[open]', { state: 'detached' }); // choosing a system closes the chooser
     await waitState(page, (s) => s.running === 'rt11' && s.run === 'running' && s.ready, { timeout: 300000, interval: 250, message: 'RT-11 up' });
+    assert.doesNotMatch(await consoleText(page), /2\.11 BSD|login:/, 'the switch started on a clear console');
     const sent = await shutdowns();
     await waitFor(() => page.evaluate(() => /RT-11 is up — the console is ready \(no login needed\)/.test(document.querySelector('.ready-banner')?.textContent ?? '')), { message: 'RT-11 ready banner' });
     // Shut down OS is disabled and says why

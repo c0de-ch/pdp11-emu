@@ -77,7 +77,9 @@ export class ControlsView {
 
   rotateKnob(name, pos) {
     const g = this.parts.knobs.get(name);
-    const target = 22.5 + 45 * (((pos | 0) % 8 + 8) % 8);
+    const k = ((pos | 0) % 8 + 8) % 8;
+    if (g.parentNode.dataset.pos !== String(k)) g.parentNode.dataset.pos = String(k);
+    const target = 22.5 + 45 * k;
     let a = this.knobAngle.get(name);
     if (a === undefined) {
       a = target;

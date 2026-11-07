@@ -1,5 +1,5 @@
-// The DL11 console: xterm.js 6 (DOM renderer) with Glass TTY VT220 at
-// integer multiples of 20 px, phosphor themes, the system's key mapping,
+// The DL11 console: xterm.js 6 (DOM renderer) with Glass TTY VT220 in the
+// size the layout chooses, phosphor themes, the system's key mapping,
 // copy/paste that works over plain HTTP, paced pastes, bell flash, history
 // replay on (re)subscribe, output flow control and the terminal-query
 // answerer rule (docs/PROTOCOL.md §1.4, docs/UI.md §5).
@@ -11,7 +11,9 @@ import { copyText, h, isMac } from './util.js';
 const ROWS = 24;
 const GLASS = '"Glass TTY VT220"';
 const SMOOTH = '"VT323", "IBM Plex Mono", ui-monospace, monospace';
-const SCROLLBAR = 14; // xterm.js 6 overlays its scrollbar; console.css gives it a gutter
+// xterm.js 6 overlays its scrollbar on the text: it gets a gutter of its own
+// (--gutter in console.css), hardly any on touch screens, which scroll by swiping
+const GUTTER = matchMedia('(pointer: coarse)').matches ? 4 : 10;
 const CHUNK = 4096; // max bytes per console message for pastes
 const PASTE_WINDOW = 8192; // keep at most this much queued at the server
 // state.console.inputQueued may not count input sent this recently (the
@@ -32,12 +34,29 @@ const MAX_BACKLOG = 4 << 20;
 // message costs far more memory than the bytes, and Array.shift() gets slow.
 const OUT_BLOCK = 4096;
 
+// label, what it sends, what it usually does (the guest decides)
 export const SEND_KEYS = [
-  ['^C', '\x03'], ['^O', '\x0f'], ['^Q', '\x11'], ['^S', '\x13'], ['^T', '\x14'], ['^U', '\x15'], ['^W', '\x17'], ['^Z', '\x1a'],
-  ['DEL', '\x7f'], ['ESC', '\x1b'],
+  ['^C', '\x03', 'Interrupt a program'], ['^O', '\x0f', 'Discard output'], ['^Q', '\x11', 'Resume output'], ['^S', '\x13', 'Pause output'],
+  ['^T', '\x14', 'Show the status'], ['^U', '\x15', 'Erase the line'], ['^W', '\x17', 'Erase a word'], ['^Z', '\x1a', 'Suspend or end input'],
+  ['DEL', '\x7f', 'Delete'], ['ESC', '\x1b', 'Escape'],
 ];
 
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const forcedColors = matchMedia('(forced-colors: active)');
+
+// Sizes (CSS px) the layout may choose from. Glass TTY's strokes and scan-line
+// gaps sit exactly on the pixel grid at multiples of 20 device px and evenly at
+// multiples of 30; between them they are antialiased unevenly, which the phosphor
+// fill in console.css evens out. VT323 is narrower and has no gaps: only for
+// windows where 80 (or 132) columns of Glass TTY would be too wide to read.
+const GLASS_SIZES = [14, 15, 16, 18, 20, 22, 24, 26, 28, 32, 36, 44, 50];
+const GLASS_LH = 20 / 19; // the font's ascent + descent are 19/20 of its size
+// one CSS px per column less: as wide as the 14 px font, but taller. At a device
+// pixel ratio of 1.5 and more the 14 px font is sharp enough and the letters would touch
+const CONDENSED_SIZES = [15, 16];
+const CONDENSED_MAX_DPR = 1.25;
+const SMOOTH_SIZES = [11, 12, 13, 14, 15, 16, 18, 20, 22, 24];
+const SMOOTH_LARGE = [26, 28, 32, 36, 40, 48, 64]; // only where it replaces Glass TTY altogether
 
 const TYPOGRAPHIC = {
   '‘': "'", '’': "'", '“': '"', '”': '"', '–': '-', '—': '-', '−': '-',
@@ -73,6 +92,7 @@ function theme(name) {
   return {
     background: t.bg, foreground: fg, cursor: fg, cursorAccent: t.bg,
     selectionBackground: `${fg}4d`, selectionInactiveBackground: `${fg}33`,
+    scrollbarSliderBackground: `${fg}2e`, scrollbarSliderHoverBackground: `${fg}66`, scrollbarSliderActiveBackground: `${fg}80`,
     black: t.bg, red: dim, green: dim, yellow: dim, blue: dim, magenta: dim, cyan: dim, white: dim,
     brightBlack: mix(fg, t.bg, 0.45), brightRed: fg, brightGreen: fg, brightYellow: fg, brightBlue: fg,
     brightMagenta: fg, brightCyan: fg, brightWhite: fg,
@@ -118,8 +138,7 @@ export class ConsoleView {
     this.pasteQueued = 0; // estimate of this client's paste bytes still in the server's queue
     this.pasteSends = []; // [time, bytes] of the paste chunks sent within STATE_LAG
     this.serverQueued = 0; // state.console.inputQueued: every viewer's input
-    this.fontMode = { family: GLASS, size: 20, lineHeight: 20 / 19 };
-    this.box = null;
+    this.fontMode = { family: GLASS, size: 20, lineHeight: GLASS_LH, letterSpacing: 0 };
   }
 
   async init() {
@@ -131,12 +150,13 @@ export class ConsoleView {
     const screen = h('div', { class: 'console-screen' });
     this.hint = h('div', { class: 'console-hint', 'aria-hidden': 'true' }, 'Click to type');
     frame.append(screen, h('div', { class: 'crt-overlay', 'aria-hidden': 'true' }), this.hint);
+    frame.style.setProperty('--gutter', `${GUTTER}px`);
     this.host.append(frame);
     this.frame = frame;
     this.screen = screen;
     const term = new Terminal({
       cols: this.prefs.get('cols'), rows: ROWS,
-      fontFamily: GLASS, fontSize: 20, lineHeight: 20 / 19, letterSpacing: 0,
+      fontFamily: GLASS, fontSize: 20, lineHeight: GLASS_LH, letterSpacing: 0,
       cursorBlink: !reducedMotion.matches, cursorStyle: 'block', cursorInactiveStyle: 'outline',
       scrollback: 2000, theme: theme(this.prefs.get('theme')),
       customGlyphs: true, drawBoldTextInBrightColors: true, minimumContrastRatio: 1,
@@ -181,8 +201,12 @@ export class ConsoleView {
     term.onBell(() => this.bell());
     term.attachCustomKeyEventHandler((ev) => this.onKey(ev));
     const ta = term.textarea;
-    ta?.addEventListener('focus', () => frame.classList.add('focused'));
-    ta?.addEventListener('blur', () => frame.classList.remove('focused'));
+    const focused = (on) => {
+      frame.classList.toggle('focused', on);
+      this.onFocusChange?.(on);
+    };
+    ta?.addEventListener('focus', () => focused(true));
+    ta?.addEventListener('blur', () => focused(false));
     // pastes go through our paced path, not xterm's (capture phase, before the textarea)
     term.element.addEventListener('paste', (ev) => {
       ev.preventDefault();
@@ -197,6 +221,7 @@ export class ConsoleView {
       else if (k === 'screenReader') term.options.screenReaderMode = !!this.prefs.get('screenReader');
     });
     reducedMotion.addEventListener('change', () => { term.options.cursorBlink = !reducedMotion.matches; });
+    forcedColors.addEventListener('change', () => this.onFontsChanged?.());
     term.onCursorMove(() => this.onCursorMove?.());
     return this;
   }
@@ -351,7 +376,7 @@ export class ConsoleView {
   input(bytes, { typed = false } = {}) {
     if (!bytes.length) return;
     if (typed) this.lastInputAt = performance.now();
-    if (!this.sendInputRaw(bytes)) this.toast('Not connected: input dropped', 'warn');
+    if (!this.sendInputRaw(bytes)) this.notConnected?.();
   }
 
   /**
@@ -492,7 +517,7 @@ export class ConsoleView {
       const n = Math.min(CHUNK, p.bytes.length - p.offset, Math.max(budget, 1));
       const part = p.bytes.subarray(p.offset, p.offset + n);
       if (!this.sendInputRaw(part)) {
-        this.toast('Not connected: paste stopped', 'warn');
+        this.notConnected?.();
         this.paste = null;
         break;
       }
@@ -606,8 +631,10 @@ export class ConsoleView {
     const name = this.prefs.get('theme');
     const t = THEMES[name] ?? THEMES.green;
     if (this.term) this.term.options.theme = theme(name);
-    this.host.style.setProperty('--phosphor', t.fg);
-    this.host.style.setProperty('--phosphor-bg', t.bg);
+    // on the console's whole area: its header takes up the colour too
+    const area = this.host.parentElement ?? this.host;
+    area.style.setProperty('--phosphor', t.fg);
+    area.style.setProperty('--phosphor-bg', t.bg);
   }
 
   applyCRT() {
@@ -617,7 +644,7 @@ export class ConsoleView {
   setCols(cols) {
     if (!this.term) return;
     this.term.resize(cols, ROWS);
-    if (this.box) this.fit(this.box.w, this.box.h, this.box.opts);
+    this.choices = null;
   }
 
   /**
@@ -640,45 +667,70 @@ export class ConsoleView {
       m = { w: t.width, h: asc + desc };
       this.metrics.set(key, m);
     }
+    const cellW = m.w * dpr + Math.round(mode.letterSpacing ?? 0);
     const charH = Math.ceil(m.h * dpr);
     const cellH = Math.floor(charH * mode.lineHeight);
-    return { w: Math.round((m.w * dpr * cols) / dpr) + SCROLLBAR, h: Math.round((cellH * ROWS) / dpr), rowH: cellH / dpr };
+    return { w: Math.round((cellW * cols) / dpr) + GUTTER, h: Math.round((cellH * ROWS) / dpr), rowH: cellH / dpr, cellW: cellW / dpr };
   }
 
   /**
-   * Picks the font for a box of w x h px: Glass TTY at the largest integer
-   * multiple of 20 px that fits, else VT323 scaled to fit (UI.md §5).
+   * Every font the layout may choose for this column count and device pixel
+   * ratio, with its terminal size in CSS px: {mode, w, h, rowH, cellW, glass,
+   * quality, sharp}, quality 1 where Glass TTY sits on the pixel grid (multiples
+   * of 20 device px), 0.7 where its scan lines repeat evenly (multiples of 30),
+   * else 0; sharp on a dense screen (a device pixel ratio of 1.5 and more).
    */
-  chooseFont(w, h, { minSize = 0 } = {}) {
+  fontChoices() {
     const cols = this.term?.cols ?? this.prefs.get('cols');
-    const k = Math.floor(Math.min((w - SCROLLBAR) / (cols * 10), h / (ROWS * 20)) + 1e-6);
-    if (k >= 1) return { family: GLASS, size: 20 * Math.min(k, 6), lineHeight: 20 / 19 };
-    let size = Math.max(6, Math.floor(Math.min((w - SCROLLBAR) / (cols * 0.4), h / ROWS)));
-    for (let i = 0; i < 40 && size > 6; i++, size--) {
-      const sz = this.sizeFor({ family: SMOOTH, size, lineHeight: 1 });
-      if (sz.w <= w && sz.h <= h) break;
+    const dpr = window.devicePixelRatio || 1;
+    const forced = forcedColors.matches;
+    const key = `${cols}|${dpr}|${forced}`;
+    if (this.choices?.key === key) return this.choices.list;
+    const list = [];
+    const add = (family, size, lineHeight, letterSpacing = 0) => {
+      const mode = { family, size, lineHeight, letterSpacing };
+      const glass = family === GLASS;
+      const onGrid = (n) => Math.abs((size * dpr) / n - Math.round((size * dpr) / n)) < 0.002;
+      // (tighter columns leave the scan lines where they are)
+      const quality = !glass ? 0 : onGrid(20) ? 1 : onGrid(30) ? 0.7 : 0;
+      const sz = this.sizeFor(mode);
+      // the font's height only differs from its size by rounding: skip one this size already gives
+      if (!list.some((f) => f.mode.family === family && f.w === sz.w && f.h === sz.h && f.quality >= quality)) list.push({ mode, glass, quality, sharp: dpr >= 1.5, ...sz });
+    };
+    // forced colours (Windows high contrast) drop every text-shadow, so nothing fills
+    // Glass TTY's scan-line gaps: thin grey bands, where VT323 has solid strokes
+    if (!forced) {
+      const sizes = new Set(GLASS_SIZES);
+      // the whole sizes that are multiples of 20 and 30 device px (a fractional CSS
+      // size, 13.33 px at 1.5, puts the scan lines between device pixels: dim)
+      for (const k of [20, 30, 40, 60, 80, 100, 120]) if (Number.isInteger(k / dpr)) sizes.add(k / dpr);
+      for (const size of [...sizes].sort((a, b) => b - a)) if (size >= 14) add(GLASS, size, GLASS_LH);
+      if (dpr <= CONDENSED_MAX_DPR) for (const size of CONDENSED_SIZES) add(GLASS, size, GLASS_LH, -1);
     }
-    return { family: SMOOTH, size: Math.max(size, minSize), lineHeight: 1 };
+    for (const size of forced ? [...SMOOTH_LARGE, ...SMOOTH_SIZES] : SMOOTH_SIZES) add(SMOOTH, size, 1);
+    // a phone's width: readable rows at the price of tighter columns, in device pixel steps
+    for (let k = 1; k <= Math.ceil(dpr); k++) add(SMOOTH, 12, 1, -k);
+    this.choices = { key, list };
+    return list;
   }
 
-  /** What fit() would produce for a box (layout candidates); {glass: k} forces Glass TTY k x. */
-  predict(box) {
-    const mode = box.glass ? { family: GLASS, size: 20 * box.glass, lineHeight: 20 / 19 } : this.chooseFont(box.w, box.h);
-    return { ...this.sizeFor(mode), glass: mode.family === GLASS, mode };
-  }
-
-  fit(w, h, opts = {}) {
+  /** Switches to a font of fontChoices(); returns the terminal's size in CSS px. */
+  fit(font) {
     if (!this.term) return { w: 0, h: 0 };
-    this.box = { w, h, opts };
-    const mode = this.chooseFont(w, h, opts);
+    const { mode } = font;
     const m = this.fontMode;
-    if (mode.family !== m.family || mode.size !== m.size) {
+    if (mode.family !== m.family || mode.size !== m.size || mode.lineHeight !== m.lineHeight || mode.letterSpacing !== m.letterSpacing) {
       this.fontMode = mode;
       this.term.options.fontFamily = mode.family;
       this.term.options.lineHeight = mode.lineHeight;
+      this.term.options.letterSpacing = mode.letterSpacing;
       this.term.options.fontSize = mode.size;
     }
-    this.frame.dataset.font = mode.family === GLASS ? `glass-${mode.size / 20}x` : `smooth-${mode.size}`;
+    this.frame.dataset.font = `${mode.family === GLASS ? 'glass' : 'smooth'}-${mode.size}`;
+    // the phosphor fill's offset (console.css): about one scan line (1/20 em) in whole device
+    // pixels, as text snaps to them: at another offset the fill can land on the text it copies
+    const dpr = window.devicePixelRatio || 1;
+    this.frame.style.setProperty('--scan-line', `${Math.round((mode.size * dpr) / 20 + 0.1) / dpr}px`);
     return this.sizeFor(mode);
   }
 

@@ -118,66 +118,57 @@ describe('UI modules', { skip }, () => {
     assert.deepEqual(g.knobs[1].lamps.slice(0, 4), [61, 60, 62, 63]);
   });
 
+  // a console model for the layout: Glass TTY cells of 0.5 x 1 em (quality as in console.js), VT323 0.4 x 1 em
+  const glass = (size, quality = 0) => ({ w: 40 * size + 10, h: 24 * size, rowH: size, cellW: size / 2, glass: true, quality, mode: { size, letterSpacing: 0 } });
+  const smooth = (size) => ({ w: 32 * size + 10, h: 24 * size, rowH: size, cellW: size * 0.4, glass: false, quality: 0, mode: { size, letterSpacing: 0 } });
+  const MODEL = {
+    fonts: [glass(40, 1), glass(30, 0.7), glass(28), glass(24), glass(20, 1), glass(18), glass(16), glass(14), ...[11, 12, 13, 14, 16, 18, 20, 24].map(smooth)],
+    chrome: { x: 22, y: 22, minY: 4, mx: 8, border: 2, bar: 42 },
+  };
+
   test('layout: side by side on wide screens, stacked on narrow ones, mobile on phones', async () => {
-    const r = await run(async () => {
+    const r = await run(async ({ fonts, chrome }) => {
       const { computeLayout } = await import('/assets/js/ui/layout.js');
-      // a console model: Glass TTY 10 x 20 px cells at 1x; VT323 0.4 x 1.0 em
-      const fit = (box) => {
-        if (box.glass) return { w: 800 * box.glass, h: 480 * box.glass, rowH: 20 * box.glass, glass: true };
-        const k = Math.floor(Math.min(box.w / 800, box.h / 480));
-        if (k >= 1) return { w: 800 * k, h: 480 * k, rowH: 20 * k, glass: true };
-        const size = Math.floor(Math.min(box.w / 32, box.h / 24));
-        return { w: size * 32, h: size * 24, rowH: size, glass: false };
-      };
-      const L = (W, H) => computeLayout({ W, H, showPanel: true, showConsole: true, consoleChrome: { w: 22, h: 56 }, consoleFit: fit });
-      return { hd: L(1904, 1020), wide: L(2544, 1380), narrow: L(1100, 1000), phone: L(374, 760), panelOnly: computeLayout({ W: 1200, H: 600, showPanel: true, showConsole: false, consoleChrome: { w: 0, h: 0 }, consoleFit: fit }) };
-    });
+      const L = (W, H) => computeLayout({ W, H, showPanel: true, showConsole: true, chrome, fonts });
+      return { hd: L(1904, 1020), wide: L(2544, 1380), narrow: L(1100, 1000), phone: L(374, 760), panelOnly: computeLayout({ W: 1200, H: 600, showPanel: true, showConsole: false, chrome, fonts }) };
+    }, MODEL);
     assert.equal(r.hd.layout, 'side');
+    assert.equal(r.hd.font.rowH, 20, 'the crisp Glass TTY size at 1920x1080');
     assert.equal(r.wide.layout, 'side');
     assert.ok(r.wide.panel.w > 1300, `wide panel ${r.wide.panel.w}`);
+    assert.ok(r.wide.font.rowH > 20, `a larger console on a large screen (${r.wide.font.rowH} px rows)`);
     assert.equal(r.narrow.layout, 'stack');
     assert.equal(r.phone.layout, 'mobile');
     assert.equal(r.panelOnly.panel.w, Math.floor(600 * (484.4 / 260.4)));
     for (const k of ['hd', 'wide', 'narrow']) {
       const x = r[k];
-      const ch = x.consoleBox.h;
-      assert.ok(x.panel.w > 0 && ch > 0, k);
+      assert.ok(x.panel.w > 0 && x.frame.h > 0, k);
     }
+    for (const k of ['hd', 'wide']) assert.equal(r[k].frame.h, r[k].panel.h, `${k}: panel and console share their height`);
   });
 
   test('layout: without a readable arrangement 24 rows of 13 px stay for the console, else the page scrolls; landscape phones fit the height', async () => {
-    const r = await run(async () => {
+    const r = await run(async ({ fonts, chrome }) => {
       const { computeLayout } = await import('/assets/js/ui/layout.js');
-      // the console model of the previous test
-      const fit = (box) => {
-        if (box.glass) return { w: 800 * box.glass, h: 480 * box.glass, rowH: 20 * box.glass, glass: true };
-        const k = Math.floor(Math.min(box.w / 800, box.h / 480));
-        if (k >= 1) return { w: 800 * k, h: 480 * k, rowH: 20 * k, glass: true };
-        const size = Math.floor(Math.min(box.w / 32, box.h / 24));
-        return { w: size * 32, h: size * 24, rowH: size, glass: false };
-      };
       // the same at a device pixel ratio of 1.25: cells are whole device pixels (13 px fonts: 17 device px, 13.6 px)
-      const fit125 = (box) => {
-        const t = fit(box);
-        if (t.glass) return t;
-        const cell = (size) => Math.ceil(size * 1.25) / 1.25;
-        let size = t.rowH;
-        while (size > 6 && Math.round(cell(size) * 24) > box.h) size--;
-        return { w: size * 32, h: Math.round(cell(size) * 24), rowH: cell(size), glass: false };
-      };
-      const L = (W, H, pageH, consoleFit = fit) => computeLayout({ W, H, pageH, showPanel: true, showConsole: true, consoleChrome: { w: 22, h: 56 }, consoleFit });
-      const s125 = L(750, 700, 700, fit125);
-      return { stack: L(750, 700), small: L(800, 560), landscape: L(828, 300, 374), portrait: L(374, 760, 828), s125, rows125: fit125(s125.consoleBox).rowH };
-    });
+      const cell = (size) => Math.ceil(size * 1.25) / 1.25;
+      const fonts125 = fonts.map((f) => ({ ...f, rowH: cell(f.rowH), h: Math.round(cell(f.rowH) * 24) }));
+      const L = (W, H, pageH, list = fonts) => computeLayout({ W, H, pageH, showPanel: true, showConsole: true, chrome, fonts: list });
+      return { stack: L(750, 700), s125: L(750, 700, 700, fonts125), small: L(800, 560), landscape: L(828, 300, 374), portrait: L(374, 760, 828) };
+    }, MODEL);
     assert.equal(r.stack.layout, 'stack');
-    assert.ok(r.stack.consoleBox.h >= 24 * 13 && r.stack.consoleBox.h < 24 * 13 + 2, `room for 24 rows of 13 px (${r.stack.consoleBox.h})`);
+    assert.ok(r.stack.font.h >= 24 * 13, `room for 24 rows of 13 px (${r.stack.font.h})`);
+    assert.ok(r.stack.font.h + 22 + 42 + 10 + r.stack.panel.h <= 700, 'all of it fits the height');
     assert.equal(r.s125.layout, 'stack');
-    assert.ok(r.rows125 >= 13, `DPR 1.25: rows of ${r.rows125} px in ${r.s125.consoleBox.h} px`);
+    assert.ok(r.s125.font.rowH >= 13, `DPR 1.25: rows of ${r.s125.font.rowH} px`);
     assert.ok(r.stack.panel.w >= 360, `panel ${r.stack.panel.w}`);
     assert.equal(r.small.layout, 'mobile', 'the panel would be narrower than 360 px: scroll instead');
     assert.equal(r.landscape.layout, 'mobile');
     assert.ok(r.landscape.panel.h <= 374 && r.landscape.panel.h >= 372, `landscape: as high as the viewport (${r.landscape.panel.h})`);
+    assert.ok(r.landscape.font.h + 4 <= 374, `landscape: all 24 rows fit the viewport (${r.landscape.font.h} px)`);
+    assert.ok(r.landscape.font.w + 8 <= 828, 'landscape: all columns fit');
     assert.equal(r.portrait.panel.w, 374, 'portrait: the full width');
+    assert.ok(r.portrait.font.rowH >= 12, `portrait: rows of ${r.portrait.font.rowH} px`);
   });
 
   test('lamp smoothing converges with the preset time constants', async () => {

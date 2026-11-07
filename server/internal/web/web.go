@@ -112,17 +112,41 @@ type Server struct {
 	closeOnce sync.Once
 }
 
-// New creates a server.
+// New creates a server. It refuses what CheckOptions refuses.
 func New(opts Options, deps Deps) (*Server, error) { return newServer(opts, deps, nil) }
+
+// CheckOptions reports every invalid value among PDP11_ALLOW_ORIGINS,
+// PDP11_HOSTS, PDP11_TRUSTED_PROXIES and PDP11_FRAME_ANCESTORS, each with
+// the name of its setting. pdp11d calls it before it touches the data
+// directory: an invalid setting is a configuration error that no restart can
+// help (DESIGN.md §5).
+func CheckOptions(opts Options) error {
+	var errs []error
+	for _, p := range opts.AllowOrigins {
+		if _, err := path.Match(p, ""); err != nil {
+			errs = append(errs, fmt.Errorf("PDP11_ALLOW_ORIGINS: bad pattern %q: %w", p, err))
+		}
+	}
+	if _, err := newHostCheck("", opts.Hosts, nil); err != nil {
+		errs = append(errs, err)
+	}
+	if _, err := parseProxies(opts.TrustedProxies); err != nil {
+		errs = append(errs, err)
+	}
+	if opts.FrameAncestors != "" {
+		if err := checkFrameAncestors(opts.FrameAncestors); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
 
 func newServer(opts Options, deps Deps, adjust func(*tuning)) (*Server, error) {
 	if deps.Machine == nil || deps.Panel == nil || deps.Systems == nil {
 		return nil, errors.New("web: Machine, Panel and Systems are required")
 	}
-	for _, p := range opts.AllowOrigins {
-		if _, err := path.Match(p, ""); err != nil {
-			return nil, fmt.Errorf("web: PDP11_ALLOW_ORIGINS: bad pattern %q: %w", p, err)
-		}
+	if err := CheckOptions(opts); err != nil {
+		return nil, err
 	}
 	hostname, _ := os.Hostname()
 	hosts, err := newHostCheck(hostname, opts.Hosts, opts.AllowOrigins)
@@ -136,9 +160,6 @@ func newServer(opts Options, deps Deps, adjust func(*tuning)) (*Server, error) {
 	}
 	if opts.FrameAncestors == "" {
 		opts.FrameAncestors = "'self'"
-	}
-	if err := checkFrameAncestors(opts.FrameAncestors); err != nil {
-		return nil, err
 	}
 	if opts.FrameHz <= 0 {
 		opts.FrameHz = 60
@@ -326,7 +347,7 @@ func checkFrameAncestors(v string) error {
 		bad = bad || strings.EqualFold(f, "self") || strings.EqualFold(f, "none")
 	}
 	if bad {
-		return fmt.Errorf("web: PDP11_FRAME_ANCESTORS %q is not a CSP source list (e.g. \"'self' https://dashboard.example.com\")", v)
+		return fmt.Errorf("PDP11_FRAME_ANCESTORS: %q is not a CSP source list (e.g. \"'self' https://dashboard.example.com\")", v)
 	}
 	return nil
 }

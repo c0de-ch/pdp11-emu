@@ -41,7 +41,7 @@ NoNewPrivileges=yes
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 # pdp11d stops in at most about 75 s: closing the web server gets 10 s, the
-# clean OS shutdown 45 s (2.11BSD needs 12-16 s, RSX and RSTS 10-12 s), the
+# clean OS shutdown 45 s (2.11BSD needs 15-18 s, RSX and RSTS 12-20 s), the
 # power off 20 s. Only pdp11d gets SIGTERM; it stops the simulator itself.
 TimeoutStopSec=90
 KillMode=mixed

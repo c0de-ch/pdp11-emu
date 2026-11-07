@@ -25,6 +25,7 @@
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   contain: layout paint;
+  container-type: inline-size;
 }
 
 .panel-svg {
@@ -44,6 +45,51 @@
   text-rendering: geometricPrecision;
 }
 
+/* On small panels the smallest labels would be under 6 px of font size: each
+   grows around its own baseline and centre (a wide one less so sideways, so that
+   it stays on its tile), and the upper line of a two-line label moves up. The
+   numbers under ADDRESSING have room to grow more: a 6 and an 8 must stay apart. */
+@container (max-width: 1000px) {
+  .panel-svg .labels .small {
+    stroke: currentColor;
+    stroke-width: 0.06px;
+    transform: scale(min(1.2, var(--xmax)), 1.2);
+  }
+
+  .panel-svg .labels .upper {
+    transform: translateY(-0.5px) scale(min(1.2, var(--xmax)), 1.2);
+  }
+
+  .panel-svg .labels .upper.wide {
+    transform: translateY(-1px) scale(min(1.2, var(--xmax)), 1.2);
+  }
+
+  .panel-svg .labels .digits {
+    stroke-width: 0;
+    transform: scale(1.35);
+  }
+}
+
+@container (max-width: 640px) {
+  .panel-svg .labels .small {
+    stroke-width: 0.1px;
+    transform: scale(min(1.3, var(--xmax)), 1.3);
+  }
+
+  .panel-svg .labels .upper {
+    transform: translateY(-0.75px) scale(min(1.3, var(--xmax)), 1.3);
+  }
+
+  .panel-svg .labels .upper.wide {
+    transform: translateY(-1.25px) scale(min(1.3, var(--xmax)), 1.3);
+  }
+
+  .panel-svg .labels .digits {
+    stroke-width: 0;
+    transform: scale(1.5);
+  }
+}
+
 .lamp-layer,
 .hit-layer {
   position: absolute;
@@ -54,10 +100,10 @@
   pointer-events: none;
 }
 
-/* Lit LED (UI.md §3): disc Ø 5.2 mm, radial gradient #ff3b2a -> #e8001a (60 %)
-   -> #8a0010 (rim), specular dot Ø 1 mm at (-1.2, -1.2) mm with 40 % white,
-   halo at most 1.5 mm beyond the disc with alpha <= 0.3. The element is
-   8.2 mm square, so the disc rim is at 63.4 % of closest-side. */
+/* Lit LED (UI.md §3): a saturated disc Ø 5.2 mm with a crisp edge, as on the
+   photo: #ff001d, darkening to #c80019 in the last tenth of the radius, and only
+   a whisper of glow (≤ 1.5 mm, alpha ≤ 0.14). The element is 8.2 mm square, so
+   the disc rim is at 63.4 % of closest-side. */
 .lamp {
   position: absolute;
   border-radius: 50%;
@@ -65,10 +111,8 @@
   will-change: opacity;
   pointer-events: none;
   forced-color-adjust: none; /* Windows high contrast removes gradients: the lamps would vanish */
-  background:
-    radial-gradient(6.1% 6.1% at 35.37% 35.37%, rgb(255 255 255 / 0.4) 0%, rgb(255 255 255 / 0.4) 55%, rgb(255 255 255 / 0) 100%),
-    radial-gradient(closest-side, #ff3b2a 0%, #e8001a 38%, #8a0010 62.6%,
-      rgb(255 34 20 / 0.26) 63.6%, rgb(255 34 20 / 0.08) 80%, rgb(255 34 20 / 0) 100%);
+  background: radial-gradient(closest-side, #ff001d 0%, #fb001d 50%, #e4001c 58%, #c80019 62.4%,
+    rgb(255 0 24 / 0.14) 63.8%, rgb(255 0 24 / 0.05) 80%, rgb(255 0 24 / 0) 100%);
 }
 
 /* Paddles: three poses cross-faded in 60-90 ms */
@@ -90,7 +134,7 @@
 }
 
 .paddle.hover .paddle-hl {
-  opacity: 0.08;
+  opacity: 0.2;
 }
 
 .paddle.focus .paddle-hl {
@@ -105,6 +149,62 @@
   transition: transform 110ms ease-out;
 }
 
+/* The light comes from the upper right. By the knob's position (the bar's axis
+   repeats after four of them): which of the bar's long edges faces it and how
+   much it catches, and how much of the reflection on the dome shows. */
+.knob-edge,
+.knob-sheen {
+  opacity: 0;
+}
+
+.knob[data-pos="3"] .edge-b,
+.knob[data-pos="7"] .edge-a {
+  opacity: 0.15;
+}
+
+.knob[data-pos="0"] .edge-a,
+.knob[data-pos="4"] .edge-b,
+.knob[data-pos="1"] .knob-sheen,
+.knob[data-pos="5"] .knob-sheen {
+  opacity: 0.22;
+}
+
+.knob[data-pos="1"] .edge-b,
+.knob[data-pos="5"] .edge-a {
+  opacity: 0.28;
+}
+
+.knob[data-pos="2"] .edge-b,
+.knob[data-pos="6"] .edge-a {
+  opacity: 0.85;
+}
+
+.knob[data-pos="2"] .knob-sheen,
+.knob[data-pos="6"] .knob-sheen {
+  opacity: 1;
+}
+
+/* The key is seen edge-on at POWER and from its flat side at OFF and LOCK. */
+.key-plug {
+  fill: #372c2a;
+}
+
+.key-rot[data-angle="315"] .key-plug {
+  fill: #544c49;
+}
+
+.key-flat,
+.key-rot[data-angle="225"] .key-edge,
+.key-rot[data-angle="405"] .key-edge {
+  display: none;
+}
+
+.key-rot[data-angle="225"] .key-keyoff,
+.key-rot[data-angle="405"] .key-keylock {
+  display: inline;
+}
+
+.no-branding .plate,
 .no-branding .branding,
 .no-branding .logo {
   display: none;
@@ -127,6 +227,34 @@
 
 .hit:focus-visible {
   box-shadow: 0 0 0 2px #0b0d10, 0 0 0 4px var(--focus, #66b3ff);
+}
+
+/* Fingers: the knobs and the key take a 44 px target on a small panel. A knob's
+   stays clear of the other knob and of the paddles below (186 % of its own size
+   at any panel width); the key's grows upwards, away from the paddles. The
+   switches keep their slots: their neighbours touch. */
+@media (pointer: coarse) {
+  .hit-knob::before,
+  .hit-key::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    border-radius: 50%;
+    transform: translateX(-50%);
+  }
+
+  .hit-knob::before {
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, min(44px, 186%));
+    transform: translate(-50%, -50%);
+  }
+
+  .hit-key::before {
+    bottom: min(0px, -50%);
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

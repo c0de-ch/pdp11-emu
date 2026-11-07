@@ -55,10 +55,39 @@ python3 -I tests/systems/bootmatrix.py --boots 2 --second-boot
 * `shutdownScript` either ends with the command that makes the OS halt itself (2.11BSD
   `shutdown -h now`, RSX `RUN $SHUTUP`; the CPU then stops with `HALT instruction`) or with
   an `expect`-only step that marks the safe point (Unix V5-V7 after the third `sync`, RSTS at
-  INIT's `Option:` prompt after `SHUTUP`); pdp11d powers off 3 s after the latter. The
-  scripts work both at the login prompt and in a logged-in session (the Unix scripts type
-  `root` first: it logs in at `login:` and is a harmless "not found" in a shell). RT-11 has
+  INIT's `Option:` prompt after `SHUTUP`); pdp11d powers off 3 s after the latter. RT-11 has
   no script: it has nothing to shut down.
+* `shutdownScript` runs on a console in any state, so it looks before it types; a user's work
+  matters more than a clean stop, and no script sends an interrupt (`docs/DESIGN.md` §7 has the
+  full rules and what each state leads to). Besides `expect`, `send` and `timeoutSec` a step can
+  have:
+  * `ifLineEnds`, a list of texts: the step runs only if the console output, once silent for
+    300 ms, ends in one of them, and is skipped otherwise. In a text `\n` stands for a line end
+    (blank lines and fill do not count) and `*` for anything on the same line.
+  * `expectAny`, a list of texts: waits for the first that appears. Unlike `expect` it leaves
+    what it saw for the next step's wait, so that the steps after a branch can fall through.
+  * `else`: when `ifLineEnds` does not hold or the wait times out, the script fails at once with
+    this text, shown after "Shut down OS: " in the toast and in the log of a daemon stop. It says
+    what to do.
+
+  The first step must have `ifLineEnds` and `else`, the last step has no `ifLineEnds`, `send` holds
+  no interrupt, and other control characters (Ctrl+D, Ctrl+U) only with `ifLineEnds`. `catalogcheck`
+  checks this and the texts, and `tests.session` cannot use these fields. The prompts:
+
+  | id | Login prompt | Root or privileged | Other users | Clearing a half-typed name |
+  |---|---|---|---|---|
+  | `bsd211` | `login: ` | `# ` | `user[1] `, `tektronix[1] ` (tcsh), `% ` (csh), `$ ` (sh) | Ctrl+U |
+  | `bsd211-pl499` | `login: ` | `# ` | `> ` (`user`, tcsh; the shutdown script refuses it, a shell's continuation prompt looks the same), `% ` (csh), `$ ` (sh) | Ctrl+U |
+  | `unixv7` | `login: `, then `Password:` | `# ` | `$ ` (`dmr`, `bin`, `sys`: no password) | `@` |
+  | `unixv6` | `login: `, after a failed login `Name: ` | `# ` | `% ` (`ken`, `bin`, `daemon`, `lvd`: no password) | `@` |
+  | `unixv5` | `login: `, after a failed login `Name: ` | `# ` | `% ` (`bin`, `daemon`: no password) | `@` |
+  | `rsx11mp` | none: `>` after `BYE`, `HELLO SYSTEM`, `Password: ` | `>` | `>`: `RUN $SHUTUP` says "Can't install privileged task" | Ctrl+U |
+  | `rsts` | none: no prompt when logged out, `HELLO 1,2`, `Password:` | `Ready` | `Ready`: `RUN $SHUTUP` says "Protection violation", `HELLO 1,2` works | Ctrl+U |
+
+  2.11BSD's syslog prints on the console where the cursor is, for instance `Mar 30 02:31:38 pdp11
+  login: ROOT LOGIN ON tty00` after the prompt; `ifLineEnds` and the first wait do not count such
+  lines. RSTS has no prompt while logged out: the scripts take `Detaching . . .`, `Bye`, `BYE/F` and
+  `Good ...` (morning, afternoon, evening) as the last line with text for it.
 * Operating systems that are not Y2K-ready get the 19xx year whose calendar matches today's
   (`%DATE_19XX_YY%`), so weekdays are right: RT-11, RSX-11M-PLUS V3.0, RSTS/E V7 and Unix V7
   (whose clock is set in single-user mode during the boot).
@@ -91,8 +120,13 @@ python3 -I tests/systems/bootmatrix.py --boots 2 --second-boot
   meet an inconsistency it may not repair alone ("UNEXPECTED INCONSISTENCY; RUN fsck MANUALLY",
   "Automatic reboot failed... help!") and leave a root shell, at every later boot too (measured:
   6 of 12 SIGKILLs during a `cp -r` on `bsd211`, 2 of 12 on `bsd211-pl499`). Both entries have a
-  persistent `dialog.ini` rule on that prompt: `fsck -y; reboot -n` (no sync: the kernel's copy of
-  a repaired root is stale).
+  persistent `dialog.ini` rule on that prompt: `fsck -y -t /_FSCK_TMP_FILE` (without `-t` fsck asks
+  "NEED SCRATCH FILE ... ENTER FILENAME:" for `/usr` and nobody answers), then `fsck -p` as a
+  check, and `reboot -n` if it passes (no sync: the kernel's copy of a repaired root is stale). On
+  a disk fsck cannot repair (tried with the superblock of the last partition destroyed) the check
+  ends with status 8: the console says "fsck cannot repair this disk" and stays at the root shell
+  rather than rebooting for ever, the boot-timeout warning comes, and Shut down OS works from that
+  shell. Factory reset restores the disk.
 * `www.retro11.de` (w11 kits: V7, RSX) answered HTTP 503 for every request on 2026-10-22; the
   Internet Archive mirrors listed for those kits were verified the same day.
 * The UNIX V6 kit's root file system has a damaged free list (`icheck /dev/rk0`: `3 dups in

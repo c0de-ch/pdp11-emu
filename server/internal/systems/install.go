@@ -139,6 +139,7 @@ func (m *Manager) runTask(ctx context.Context, sys *catalog.System, kind, req st
 		return fmt.Errorf("%s is in use by the simulator: %w", sys.Name, api.ErrBusy)
 	}
 	m.tasks[sys.ID] = &task{kind: kind, cancel: cancel}
+	delete(m.failures, sys.ID)
 	m.mu.Unlock()
 	m.changed()
 	defer func() {
@@ -177,7 +178,12 @@ func (m *Manager) runTask(ctx context.Context, sys *catalog.System, kind, req st
 		return ctx.Err()
 	default:
 		m.log.Error("installation failed", "task", kind, "system", sys.ID, "err", err)
-		progress("error", 0, 0, err.Error())
+		f := m.describeFailure(kind, err)
+		m.mu.Lock()
+		m.failures[sys.ID] = f
+		m.mu.Unlock()
+		m.publish(api.Progress{Task: kind, ID: sys.ID, Phase: "error", Text: err.Error(), Req: req, Failure: f})
+		return reportedError{err}
 	}
 	return err
 }
@@ -186,13 +192,13 @@ func (m *Manager) runTask(ctx context.Context, sys *catalog.System, kind, req st
 // rate-limited to a few updates per second within a phase.
 func (m *Manager) progressPublisher(kind, id, req string) progressFunc {
 	var last time.Time
-	lastPhase := ""
+	lastPhase, lastText := "", ""
 	return func(phase string, done, total int64, text string) {
 		now := time.Now()
-		if phase == lastPhase && done < total && now.Sub(last) < 250*time.Millisecond {
+		if phase == lastPhase && text == lastText && done < total && now.Sub(last) < 250*time.Millisecond {
 			return
 		}
-		last, lastPhase = now, phase
+		last, lastPhase, lastText = now, phase, text
 		p := api.Progress{Task: kind, ID: id, Phase: phase, Bytes: done, Total: total, Text: text, Req: req}
 		if total > 0 {
 			p.Pct = float64(done) * 100 / float64(total)
@@ -241,7 +247,7 @@ func (m *Manager) install(ctx context.Context, sys *catalog.System, kind string,
 		}
 	}
 	if free, err := freeSpaceOf(dir); err == nil && free < need {
-		return fmt.Errorf("not enough free space in %s: %s needed, %s available", dir, human(need), human(free))
+		return &spaceError{dir: dir, need: need, free: free}
 	}
 
 	mk := marker{ID: sys.ID}
@@ -264,7 +270,23 @@ func (m *Manager) install(ctx context.Context, sys *catalog.System, kind string,
 		m.removeParts(sys)
 		return err
 	}
-	return m.commit(sys, mk, kind == "install" && m.hasMarker(sys.ID))
+	restored, err := m.commit(sys, mk, kind == "install" && m.hasMarker(sys.ID))
+	// also when the commit failed halfway: the disks restored so far stay restored
+	if n := len(restored); n > 0 && n < diskCount(sys) {
+		// The file systems of a system can span its disks: tell the users,
+		// who may not read the log.
+		progress("warning", 0, 0, fmt.Sprintf("%s: the disk %s was missing and is back as it came from the archive. The other disks keep their contents, which may not fit it; Factory reset restores them all.",
+			sys.Name, strings.Join(restored, ", ")))
+	}
+	return err
+}
+
+func diskCount(sys *catalog.System) int {
+	n := 0
+	for _, a := range sys.Artifacts {
+		n += len(a.Files)
+	}
+	return n
 }
 
 // commit puts the extracted files in place: it removes the marker (a
@@ -273,19 +295,20 @@ func (m *Manager) install(ctx context.Context, sys *catalog.System, kind string,
 // cancelled; a crash in between leaves the system without a marker, so that
 // it is installed again. With keep (a repair) only the missing files are
 // restored and the marker stays: no image is replaced, and a crash in between
-// must not turn the next repair into a full install.
-func (m *Manager) commit(sys *catalog.System, mk marker, keep bool) error {
+// must not turn the next repair into a full install. It returns the disks a
+// repair restored.
+func (m *Manager) commit(sys *catalog.System, mk marker, keep bool) (restored []string, err error) {
 	mk.InstalledAt = time.Now().UTC()
 	raw, err := json.MarshalIndent(mk, "", "  ")
 	if err != nil {
 		m.removeParts(sys)
-		return err
+		return nil, err
 	}
 	dir := m.SystemDir(sys.ID)
 	if !keep {
 		if err := os.Remove(filepath.Join(dir, markerName)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			m.removeParts(sys)
-			return err
+			return nil, err
 		}
 	}
 	dirs := map[string]bool{}
@@ -303,7 +326,10 @@ func (m *Manager) commit(sys *catalog.System, mk marker, keep bool) error {
 			}
 			if err := os.Rename(m.partPath(sys.ID, f), p); err != nil {
 				m.removeParts(sys)
-				return err
+				return restored, err
+			}
+			if keep {
+				restored = append(restored, path.Base(f.Path))
 			}
 			dirs[filepath.Dir(p)] = true
 		}
@@ -315,7 +341,7 @@ func (m *Manager) commit(sys *catalog.System, mk marker, keep bool) error {
 			syncDir(d)
 		}
 	}
-	return atomicfile.WriteFile(filepath.Join(dir, markerName), append(raw, '\n'), 0o640)
+	return restored, atomicfile.WriteFile(filepath.Join(dir, markerName), append(raw, '\n'), 0o640)
 }
 
 // partPath is where a file of an artifact is extracted before the commit.
@@ -408,6 +434,8 @@ func (m *Manager) obtain(ctx context.Context, a catalog.Artifact, dst string, pr
 	}
 	if err := m.dl.download(ctx, a, dst, func(n int64) {
 		progress("download", n, a.Size, "Downloading "+archiveName(a))
+	}, func(note string) {
+		progress("download", 0, a.Size, note)
 	}); err != nil {
 		return "", fmt.Errorf("%w (you can also place the file in %s)", err, m.importDir())
 	}
@@ -508,14 +536,14 @@ func verifyFile(ctx context.Context, p string, size int64, sum string, progress 
 		return err
 	}
 	if fi.Size() != size {
-		return fmt.Errorf("%s: size %d, want %d", p, fi.Size(), size)
+		return &wrongFileError{fmt.Sprintf("%s: size %d, want %d", p, fi.Size(), size)}
 	}
 	h := sha256.New()
 	if _, err := io.Copy(h, &progressReader{ctx: ctx, r: f, fn: progress}); err != nil {
 		return err
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); !strings.EqualFold(got, sum) {
-		return fmt.Errorf("%s: sha256 %s, want %s", p, got, sum)
+		return &wrongFileError{fmt.Sprintf("%s: sha256 %s, want %s", p, got, sum)}
 	}
 	return nil
 }

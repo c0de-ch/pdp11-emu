@@ -8,7 +8,7 @@
 
 const FEATURES = {
   panel: 'popup,width=1300,height=760',
-  console: 'popup,width=880,height=660',
+  console: 'popup,width=880,height=700',
 };
 
 export class Popouts {

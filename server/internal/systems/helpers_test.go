@@ -139,7 +139,10 @@ func defaultSpecs() []sysSpec {
 			bootINI:  "; 2.11BSD-like\r\nset rq enabled\nset rq0 rauser=1000\nattach -e rq0 ${DISK0}\nset dli enabled\nset dz lines=8\n",
 			dialog:   "; skip the countdown\nexpect -p \"Press <CR> to boot\" send \"\\r\"; continue\n",
 			extra: map[string]any{"default": true, "bootTimeoutSec": 90, "shutdownScript": []map[string]any{
-				{"send": "shutdown -h now\r"}, {"expect": "halting", "timeoutSec": 60}}}},
+				{"ifLineEnds": []string{"\n# "}, "else": "log in first"},
+				{"expectAny": []string{"# ", "Password:"}},
+				{"send": "shutdown -h now\r"},
+				{"expect": "halting", "timeoutSec": 60}}}},
 		{id: "v6", format: "zip", class: "redistributable",
 			files:   []file{{"unix0_v6_rk.dsk", diskImage(2, 64*1024)}, {"unix1_v6_rk.dsk", diskImage(3, 48*1024)}},
 			bootINI: "set rk enabled\nattach -e rk0 ${DISK0}\nattach -e rk1 ${DISK1}\n",
@@ -313,6 +316,18 @@ func (p *progressLog) phases(id string) []string {
 	for _, e := range p.ev {
 		if e.ID == id && (len(out) == 0 || out[len(out)-1] != e.Phase) {
 			out = append(out, e.Phase)
+		}
+	}
+	return out
+}
+
+func (p *progressLog) all(id string) []api.Progress {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []api.Progress
+	for _, e := range p.ev {
+		if e.ID == id {
+			out = append(out, e)
 		}
 	}
 	return out

@@ -149,21 +149,25 @@ EXAM and DEP do nothing.
 * **`shutdownOS`** input: refused with a hint if the CPU is not running, the
   system has no `shutdownScript`, or a shutdown is already queued or running.
   Types the script on the console (`DESIGN.md` §7), progress task `shutdown`
-  (phases `step`, then `done`, `error` or `cancelled`): each step waits ≤
-  `timeoutSec` (default 30 s) for its Expect — a literal, case-sensitive
-  substring of the output after the previous Send (the first step also sees the
-  text after the last newline of the history) — then **waits 250 ms** (RSX and
-  RSTS post their terminal read late) and types Send. The `step` texts are
-  readable: `Waiting for “<expect>”`, `Typing “<send>”` (`Pressing Return` for
-  a bare line end), `Waiting for the system to halt…` (also during the 3 s
-  settle of an expect-only script) and, for the `shutdownOS` input, `Powering
-  off` before the power off; line ends are dropped, other control characters
-  shown as `^X`, blanks around them trimmed (the raw strings go to the debug
-  log). A prompt that does not appear is logged at warn with the console's last
-  line, in the same form. A boot the panel started that has not reached its
-  ready prompt comes first: what is typed before the prompt is lost, so the
-  shutdown waits up to 25 s for it (`Waiting for the system to finish booting…`).
-  Then:
+  (phases `step`, then `done`, `error` or `cancelled`): a step with IfLineEnds
+  runs only if the console output, once silent for 300 ms (at most 2 s), ends in
+  one of its texts; otherwise it is skipped or, with Else, the shutdown fails at
+  once with that text. A step waits ≤ `timeoutSec` (default 30 s) for its Expect
+  or the first of its ExpectAny — literal, case-sensitive substrings of the
+  output after the previous Send (until something was typed also the text after
+  the last newline of the history) — then **waits 250 ms** (RSX and RSTS post
+  their terminal read late) and types Send. The `step` texts are readable:
+  `Checking the console…` for a first step with IfLineEnds, `Waiting for
+  “<expect>”` (`Waiting for the console…` for ExpectAny), `Typing “<send>”`
+  (`Pressing Return` for a bare line end), `Waiting for the system to halt…` (also
+  during the 3 s settle of an expect-only script) and, for the `shutdownOS`
+  input, `Powering off` before the power off; line ends are dropped, other
+  control characters shown as `^X`, blanks around them trimmed (the raw strings
+  go to the debug log). A prompt that does not appear and a console the script
+  cannot go on from are logged at warn with the console's last line, in the same
+  form. A boot the panel started that has not reached its ready prompt comes
+  first: what is typed before the prompt is lost, so the shutdown waits up to
+  25 s for it (`Waiting for the system to finish booting…`). Then:
   * last step has a Send → wait ≤ 30 s for the CPU to stop (the OS halts
     itself, `HALT instruction`); on timeout toast (`warn`, to everyone, with the
     request's `req`) the reason plus "Pull the plug (turn the key to OFF) only if
@@ -171,8 +175,8 @@ EXAM and DEP do nothing.
   * last step is expect-only (the safe point: Unix V5-V7 after `sync`, RSTS at
     `Option:`) → wait 3 s more;
   * then key = `off` (persisted) and PowerOff.
-  An Expect that does not appear in time fails the same way (warn toast, power
-  stays on). A stop that the panel did not request, during the script or the
+  An Expect that does not appear in time and a step's Else fail the same way
+  (warn toast with that text, power stays on). A stop that the panel did not request, during the script or the
   waits, counts as the OS having halted (→ power off). A HALT from the panel
   (`Front panel HALT`, requested) cancels the shutdown (`info` toast "Shut down OS
   cancelled: the CPU was halted from the panel."), the machine going off or into
@@ -278,4 +282,5 @@ while the linear (smoothed) brightness `b` < 1/64.
   shutdown script and waits for the halt (or the 3 s settle) as above, but
   neither powers off nor changes the key; waits for the panel operation in
   flight (`Busy` = `shutdown` meanwhile); works before and after `Run`
-  returned; returns nil at once when the CPU is not running.
+  returned; returns nil at once when the CPU is not running, and the failure
+  text when the script fails.

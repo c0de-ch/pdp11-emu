@@ -22,15 +22,23 @@
   <div id="toasts" class="toasts"></div>
   <main id="stage" class="stage">
     <section id="panel-area" class="area panel-area" aria-label="Front panel">
+      <!-- before the panel, though shown below it: from the console Shift+Tab reaches the panel's controls first -->
+      <div id="panel-dock" class="panel-dock">
+        <div id="panel-bar" class="dock-bar"></div>
+        <div id="readouts" class="readouts" hidden></div>
+        <ul id="panel-notes" class="hint-list"></ul>
+        <div id="panel-keys" class="dock-section"></div>
+        <div id="panel-about" class="dock-section panel-about"></div>
+      </div>
       <div id="panel-host" class="panel-host"></div>
       <div id="panel-away" class="away" hidden>
         <p>The front panel is in another window.</p>
         <button type="button" class="btn" data-bring-back="panel">Bring back</button>
       </div>
-      <div id="readouts" class="readouts" hidden></div>
       <p id="landscape-hint" class="landscape-hint" hidden>Turn your device to landscape for a larger panel.</p>
     </section>
     <section id="console-area" class="area console-area" aria-label="Console terminal">
+      <!-- before the terminal, though shown below it: Shift+Tab goes from the terminal to its header -->
       <div id="console-head" class="console-head"></div>
       <div id="console-host" class="console-host"></div>
       <div id="console-away" class="away" hidden>

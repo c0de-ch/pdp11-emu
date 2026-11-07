@@ -15,8 +15,15 @@
   --accent: #33ff66;
   --radius: 6px;
   --toolbar-h: 44px;
+  --ui: 1; /* scale of the toolbar and the dock: larger next to the machine on a large screen */
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color-scheme: dark;
+}
+
+@media (min-width: 2200px) and (min-height: 1100px) {
+  :root {
+    --ui: 1.25;
+  }
 }
 
 * {
@@ -60,6 +67,11 @@ a {
   outline-offset: 2px;
 }
 
+/* the focus came back by script after a click: no ring until a key is pressed there */
+.focus-quiet:focus-visible {
+  outline: none;
+}
+
 .noscript {
   padding: 2rem;
 }
@@ -90,31 +102,61 @@ body.scroll .app {
   min-height: 100%;
 }
 
+/* The stage has two zones: the machine in a dark well under the toolbar, and
+   the dock below it, reaching the window's bottom (--dock-top, set by main.js). */
 .stage {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   gap: 10px;
   padding: 8px;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
 }
 
-.stage[data-layout="side"] {
-  flex-direction: row;
+.stage.docked {
+  background: linear-gradient(to bottom,
+    var(--page) var(--dock-top), var(--border) var(--dock-top),
+    var(--border) calc(var(--dock-top) + 1px), var(--surface) calc(var(--dock-top) + 1px));
 }
 
-.stage[data-layout="stack"],
-.stage[data-layout="mobile"] {
-  flex-direction: column;
-}
-
-.stage[data-layout="mobile"] {
+.stage[data-layout="side"],
+.stage[data-layout="console"] {
   align-items: stretch;
 }
 
+.stage[data-layout="stack"],
+.stage[data-layout="wide"],
+.stage[data-layout="mobile"] {
+  flex-direction: column;
+  align-items: center;
+}
+
+.stage[data-layout="stack"] .console-area {
+  flex: 1 1 auto;
+}
+
+/* the panel at the console's left edge, the console's header beside it (console.css) */
+.stage[data-layout="wide"] {
+  justify-content: flex-start;
+}
+
+.stage[data-layout="wide"] .panel-area {
+  margin-right: var(--beside-panel);
+}
+
+.stage[data-layout="panel"],
+.stage[data-layout="away"],
+.app.kiosk .stage {
+  align-items: center;
+}
+
+.app.kiosk .stage[data-layout="side"] {
+  align-items: flex-start;
+}
+
 .stage[data-layout="mobile"] .console-area {
-  overflow-x: auto;
+  align-items: center;
 }
 
 .area {
@@ -126,12 +168,22 @@ body.scroll .app {
 .panel-area {
   display: flex;
   flex-direction: column;
-  align-items: safe center;
-  gap: 4px;
+  align-items: stretch;
+  gap: 0;
 }
 
-.panel-host {
+.panel-host,
+.panel-area > .away {
   flex: none;
+  order: 1;
+}
+
+.panel-dock {
+  order: 2;
+}
+
+.landscape-hint {
+  order: 3;
 }
 
 .console-area {
@@ -146,12 +198,117 @@ body.scroll .app {
 
 .app.kiosk .toolbar,
 .app.kiosk .banners,
-.app.kiosk .console-head {
+.app.kiosk .console-head,
+.app.kiosk .dock-bar {
   display: none;
 }
 
-.app.kiosk .stage {
+/* The dock: a bar with the switches of the view above it, then notes on how to
+   work it. Under the panel only the readouts show unless the stage is side by side. */
+.panel-dock {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-top: calc(var(--dock-gap, 0px) + 9px);
+  font-size: calc(13px * var(--ui));
+}
+
+.stage:not([data-layout="side"]) .panel-dock {
+  margin-top: 0;
+}
+
+.stage:not([data-layout="side"]) .dock-bar,
+.stage:not([data-layout="side"]) #panel-notes,
+.stage:not([data-layout="side"]) #panel-keys,
+.stage:not([data-layout="side"]) #panel-about {
+  display: none;
+}
+
+.dock-bar,
+.head-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: calc(34px * var(--ui));
+  padding: 0 2px;
+}
+
+.dock-bar .title,
+.head-bar .title {
+  font-weight: 600;
+}
+
+.dock-bar .grow {
+  margin-right: auto;
+}
+
+.dock-bar .btn,
+.head-bar .btn {
+  height: calc(26px * var(--ui));
+  padding: 0 calc(9px * var(--ui));
+}
+
+.dock-bar .toggle,
+.head-bar .toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hint-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(250px * var(--ui))), 1fr));
+  gap: 3px 18px;
+  margin: 4px 0 0;
+  padding: 0 2px;
+  list-style: none;
+  color: var(--muted);
+}
+
+.shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 18px;
+  margin: 0;
   padding: 0;
+}
+
+.dock-section {
+  margin: 8px 2px 0;
+  color: var(--muted);
+}
+
+.dock-section h3 {
+  margin: 0 0 3px;
+  color: var(--text);
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.panel-about {
+  max-width: 80ch;
+}
+
+.hint-list li {
+  text-wrap: pretty; /* no last line of one word */
+}
+
+.hint-list li:only-child {
+  grid-column: 1 / -1;
+}
+
+.hint-list kbd {
+  margin-right: 1px;
+  color: var(--text);
+  font-size: 0.92em;
+}
+
+.gone {
+  display: none !important;
 }
 
 /* "... is in another window — Bring back": narrow, it shares the row with the other view */
@@ -160,13 +317,14 @@ body.scroll .app {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
   width: 200px;
-  min-height: 120px;
+  min-height: 140px;
   padding: 16px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  color: var(--muted);
+  border: 1px solid #3a3f45;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
   text-align: center;
 }
 
@@ -225,6 +383,38 @@ body.scroll .app {
   background: #6d241e;
 }
 
+/* a rare action beside the main one */
+.btn-quiet {
+  background: transparent;
+  border-color: #3a3f45;
+  color: var(--muted);
+}
+
+.btn-quiet:hover:not([disabled]) {
+  background: #262a2f;
+  color: var(--text);
+}
+
+/* disabled, it must not read like plain text: the outline stays */
+.btn-quiet[disabled] {
+  opacity: 1;
+  border-style: dashed;
+  color: #6e737a;
+}
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--focus);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -256,6 +446,11 @@ body.scroll .app {
   stroke-linejoin: round;
 }
 
+.icon-btn svg .filled {
+  fill: currentColor;
+  stroke: none;
+}
+
 /* ------------------------------------------------------------ toolbar */
 
 .toolbar {
@@ -263,11 +458,27 @@ body.scroll .app {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: var(--toolbar-h);
+  min-height: calc(var(--toolbar-h) * var(--ui));
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  flex-wrap: wrap;
+  font-size: calc(14px * var(--ui));
+}
+
+.toolbar .btn {
+  height: calc(30px * var(--ui));
+  padding: 0 calc(12px * var(--ui));
+}
+
+.toolbar .icon-btn {
+  min-width: calc(30px * var(--ui));
+  height: calc(30px * var(--ui));
+  font-size: inherit;
+}
+
+.toolbar .icon-btn svg {
+  width: calc(18px * var(--ui));
+  height: calc(18px * var(--ui));
 }
 
 .toolbar .brand {
@@ -313,8 +524,8 @@ body.scroll .app {
 }
 
 .seg button {
-  height: 28px;
-  padding: 0 10px;
+  height: calc(28px * var(--ui));
+  padding: 0 calc(10px * var(--ui));
   border: 0;
   background: var(--surface-2);
   cursor: pointer;
@@ -338,17 +549,16 @@ body.scroll .app {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  height: 28px;
+  height: calc(28px * var(--ui));
   padding: 0 11px;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--page);
   white-space: nowrap;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui));
   font-variant-numeric: tabular-nums;
   max-width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .status-pill .dot,
@@ -382,14 +592,103 @@ body.scroll .app {
   50% { opacity: 0.35; }
 }
 
-/* narrow toolbars: icons only */
-@media (max-width: 1100px) {
-  .toolbar .label-long { display: none; }
+/* The toolbar stays on one row: first the brand goes and the pop-out buttons
+   become icons, then the status pill keeps only the run state and gives way.
+   A phone gets two tidy rows: the machine, then the view. */
+.toolbar > * {
+  flex: none;
 }
 
-@media (max-width: 760px) {
-  .toolbar .label { display: none; }
+.toolbar .status-pill {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.status-pill .status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar .row-break {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  .toolbar .label-long { display: none; }
+  .toolbar.full .brand { display: none; }
+}
+
+/* a pop-out's short toolbar keeps its brand down to a phone, where its one row needs the room */
+@media (max-width: 480px) {
   .toolbar .brand { display: none; }
+}
+
+@media (max-width: 900px) {
+  .toolbar.full .status-pill .part + .part { display: none; }
+
+  .toolbar .btn {
+    padding: 0 9px;
+  }
+
+  .toolbar .seg button {
+    padding: 0 8px;
+  }
+}
+
+@media (max-width: 860px) {
+  .toolbar {
+    gap: 4px;
+  }
+
+  .toolbar .sep,
+  .toolbar .caret {
+    display: none;
+  }
+}
+
+@media (max-width: 759px) {
+  .toolbar {
+    flex-wrap: wrap;
+    padding: 6px 8px;
+  }
+
+  .toolbar .row-break {
+    display: block;
+    flex-basis: 100%;
+    height: 0;
+    margin-top: -4px; /* its own flex line: one gap between the rows, not two */
+  }
+
+  .toolbar .icon-btn {
+    padding: 0 4px;
+  }
+
+  .toolbar.full .spacer {
+    display: none;
+  }
+
+  /* takes the rest of the second row, whatever that is */
+  .toolbar.full .status-pill {
+    flex: 1 1 0;
+    margin-left: 2px;
+  }
+}
+
+/* fingers need larger targets than a mouse */
+@media (pointer: coarse) {
+  .toolbar .btn,
+  .toolbar .icon-btn,
+  .toolbar .seg button,
+  .dock-bar .btn,
+  .head-bar .btn {
+    height: 36px;
+  }
+
+  .dock-bar,
+  .head-bar {
+    height: 42px;
+  }
 }
 
 /* ------------------------------------------------------------ menus */
@@ -437,11 +736,20 @@ body.scroll .app {
   cursor: default;
 }
 
+/* room for the check mark, so hints line up whether it shows or not */
+.menu-item[aria-checked]::after {
+  content: "";
+  flex: none;
+  width: 14px;
+  text-align: right;
+}
+
 .menu-item[aria-checked="true"]::after {
   content: "✓";
   color: var(--focus);
 }
 .menu-item .muted {
+  margin-left: auto;
   white-space: normal;
   text-align: right;
 }
@@ -450,6 +758,30 @@ body.scroll .app {
   height: 1px;
   margin: 4px 2px;
   background: var(--border);
+}
+
+/* the Send key menu: the key, then what it does */
+.key-menu .menu-item {
+  justify-content: flex-start;
+  gap: 0;
+}
+
+.key-menu .menu-item .key {
+  flex: none;
+  width: 44px;
+  font: 13px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+.key-menu .menu-item .muted {
+  margin-left: 0;
+  text-align: left;
+  font-size: 13px;
+}
+
+.key-menu .menu-title {
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .menu-title {
@@ -483,6 +815,11 @@ body.scroll .app {
   background: rgb(5 6 8 / 0.7);
 }
 
+/* over another dialog, which is dimmed already */
+.dialog.nested::backdrop {
+  background: rgb(5 6 8 / 0.35);
+}
+
 .dialog-head {
   display: flex;
   align-items: center;
@@ -498,7 +835,17 @@ body.scroll .app {
   font-weight: 650;
 }
 
+.dialog-scroll {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 14px 18px;
   overflow: auto;
 }
@@ -507,13 +854,51 @@ body.scroll .app {
   margin-top: 0;
 }
 
+/* more below the fold: a fade over the lower edge, and a button that pages down */
+.scroll-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  height: 48px;
+  padding: 0 0 7px;
+  border: 0;
+  background: linear-gradient(to bottom, rgb(22 24 27 / 0), rgb(22 24 27 / 0.95) 70%);
+  font-size: 12.5px;
+  pointer-events: none; /* what shows through the fade can still be clicked */
+}
+
+.scroll-hint span {
+  padding: 2px 12px;
+  pointer-events: auto;
+  cursor: pointer;
+  border: 1px solid #3a3f45;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.scroll-hint:hover span {
+  background: #262a2f;
+}
+
 .dialog-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 18px;
   border-top: 1px solid var(--border);
+}
+
+.dialog-note {
+  flex: 1 1 260px;
+  margin: 0;
+  font-size: 12.5px;
 }
 
 .shutdown-text {
@@ -528,14 +913,32 @@ body.scroll .app {
   max-width: none;
 }
 
-.dialog.tall .dialog-body {
-  min-height: min(60vh, 560px);
+/* the same size on every tab; each tab uses the width with two columns */
+.dialog.help {
+  width: min(1240px, calc(100vw - 24px));
+  height: min(880px, calc(100vh - 24px));
+  max-width: none;
 }
 
 /* system chooser */
+.dialog.chooser {
+  width: min(1240px, calc(100vw - 24px));
+  max-width: none;
+}
+
+/* why something cannot be done now */
+.notice {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid #7a5a1e;
+  border-radius: var(--radius);
+  background: #2b2111;
+  color: #f4d79a;
+}
+
 .sys-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
   gap: 10px;
 }
 
@@ -543,10 +946,16 @@ body.scroll .app {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-2);
+}
+
+/* room for what went wrong and what to do */
+.sys-card.failed {
+  grid-column: 1 / -1;
 }
 
 .sys-card[data-selected="true"] {
@@ -562,10 +971,99 @@ body.scroll .app {
   font-size: 15px;
 }
 
+/* the cards of a row line up: description, sizes and buttons at the same heights */
+.sys-card .desc-wrap {
+  flex: 1 1 auto;
+}
+
+.sys-card .desc-box {
+  position: relative;
+}
+
 .sys-card .desc {
+  display: -webkit-box;
   margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
   color: var(--muted);
   font-size: 13px;
+  line-height: 18px;
+}
+
+.sys-card.expanded .desc {
+  display: block;
+}
+
+/* the notice takes a line of each row, and a low window has fewer to give */
+.sys-list.short .desc {
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+}
+
+@media (max-height: 740px) {
+  .sys-card .desc {
+    -webkit-line-clamp: 5;
+    line-clamp: 5;
+  }
+}
+
+.sys-card .more {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 0 0 0 26px;
+  background: linear-gradient(to right, rgb(29 32 36 / 0), var(--surface-2) 22px);
+  line-height: 18px;
+}
+
+.sys-card.expanded .more {
+  position: static;
+  padding: 0;
+  background: none;
+}
+
+@media (forced-colors: active) {
+  /* gradients and shadows are gone: "More" keeps clear of the text, the selected card its mark */
+  .sys-card .more {
+    background: Canvas;
+  }
+
+  .sys-card[data-selected="true"] {
+    border-width: 3px;
+    padding: 10px;
+  }
+}
+
+/* sizes and login, or the progress in their place: the card keeps its height */
+.sys-card .sys-slot {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-height: 46px;
+}
+
+.sys-card .sys-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sys-card .sys-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 4px;
+}
+
+.sys-card .sys-progress .progress-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  line-height: 16px;
 }
 
 .sys-card .meta {
@@ -575,16 +1073,113 @@ body.scroll .app {
   font-size: 12px;
 }
 
+/* three badges fit one line of the narrowest card */
+.sys-card .badges {
+  gap: 5px;
+}
+
+.sys-card .badges .badge {
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.sys-card .meta.muted {
+  gap: 0;
+}
+
+.sys-card .meta.muted span + span::before {
+  content: "·";
+  margin: 0 5px;
+}
+
 .sys-card .actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
-  margin-top: auto;
   padding-top: 4px;
 }
 
-.sys-card .creds {
+/* the rare, destructive action apart from the main one */
+.sys-card .reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.sys-card .reset .why {
+  color: var(--muted);
   font-size: 12px;
+}
+
+/* a failed install: what happened, what to do, the error itself */
+.failure {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #7a2e26;
+  border-left: 4px solid var(--danger);
+  border-radius: var(--radius);
+  background: #241412;
+  overflow-wrap: anywhere; /* URLs, paths and sha256 sums */
+}
+
+.failure-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.failure-x {
+  flex: none;
+  min-width: 24px;
+  height: 24px;
+}
+
+.failure p {
+  margin: 4px 0 0;
+}
+
+.failure-do code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgb(0 0 0 / 0.35);
+  font: 12.5px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+.failure .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 0;
+}
+
+.failure-detail {
+  margin-top: 8px;
+  font-size: 12.5px;
+}
+
+.failure-detail summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.failure-detail pre {
+  max-height: 160px;
+  margin: 6px 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 4px;
+  background: #0c0d0f;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.4 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+.sys-card .creds {
   color: var(--muted);
 }
 
@@ -607,6 +1202,7 @@ body.scroll .app {
 .badge-warn { border-color: #7a5a1e; color: #f2c46d; }
 .badge-info { border-color: #2b6aa8; color: #8cc4ff; }
 .badge-muted { color: var(--muted); }
+.badge-danger { border-color: #8a2e26; color: #ff9d92; }
 
 .progress {
   position: relative;
@@ -723,6 +1319,138 @@ body.scroll .app {
   margin: 0;
 }
 
+/* help, System tab: name and notes, the facts beside them */
+.sys-help {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-areas: "intro facts" "text facts";
+  grid-template-rows: auto 1fr;
+  gap: 0 28px;
+  align-items: start;
+}
+
+.sys-intro { grid-area: intro; }
+.sys-text { grid-area: text; min-width: 0; }
+
+.sys-facts {
+  grid-area: facts;
+  padding: 2px 14px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.sys-facts .kv {
+  display: block;
+}
+
+.sys-facts .link-btn {
+  display: block;
+  margin-top: 2px;
+}
+
+.sys-facts .kv dt {
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.sys-facts .kv dd {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.sys-text .notes > :first-child {
+  margin-top: 0.4em;
+}
+
+.sys-text details {
+  margin-top: 1em;
+}
+
+.help-cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 32px;
+  align-items: start;
+}
+
+.tutorial-steps {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.tutorial-steps li + li {
+  margin-top: 4px;
+}
+
+.listing {
+  width: 100%;
+  margin-bottom: 10px;
+  border-collapse: collapse;
+}
+
+.listing th,
+.listing td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.listing th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12.5px;
+}
+
+.listing td:nth-child(-n+3) {
+  white-space: nowrap;
+  font: 12.5px/20px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+@media (max-width: 900px) {
+  .sys-help {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "intro" "facts" "text";
+    gap: 12px;
+  }
+
+  .help-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  /* the words first, then the value at the full width */
+  .kv {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .kv dd + dt {
+    margin-top: 8px;
+  }
+
+  .shortcut-table,
+  .shortcut-table tbody,
+  .shortcut-table tr,
+  .shortcut-table td {
+    display: block;
+    width: auto;
+  }
+
+  .shortcut-table td:first-child {
+    width: auto;
+    padding-bottom: 0;
+    border-bottom: 0;
+    white-space: normal;
+  }
+
+  .listing td:nth-child(-n+3) {
+    white-space: normal;
+  }
+}
+
 .shortcut-table {
   border-collapse: collapse;
   width: 100%;
@@ -772,8 +1500,26 @@ kbd {
   flex: 1;
 }
 
+.dialog.help .dialog-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.help-body[data-tab="log"] {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.help-body[data-tab="log"] .log-view {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .log-lines {
-  height: min(52vh, 500px);
+  flex: 1 1 auto;
+  min-height: 160px;
   margin: 0;
   padding: 8px 10px;
   overflow: auto;
@@ -787,33 +1533,101 @@ kbd {
   tab-size: 8;
 }
 
-.guide-figure {
-  position: relative;
-  margin: 0 0 10px;
+/* panel guide: the figure stays in view while the legend scrolls */
+.guide {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
 }
 
-.guide-figure .panel-frame {
+.guide-figure {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding-bottom: 8px;
+  background: var(--surface);
+  container-type: inline-size;
+}
+
+.guide-figure figcaption {
+  margin-top: 6px;
+  font-size: 12.5px;
+}
+
+@media (max-height: 560px) {
+  .guide-figure figcaption {
+    display: none;
+  }
+}
+
+.guide-art {
+  position: relative;
+  /* the figure fits the dialog's height, also in a low window */
+  max-width: calc((100vh - 210px) * 1.86);
+  margin: 0 auto;
+}
+
+.guide-art .panel-frame {
   pointer-events: none;
+}
+
+.guide-leaders {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.guide-leaders line {
+  stroke: #66b3ff;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* on the light shelf */
+.guide-leaders line.shelf {
+  stroke: #1f4f80;
 }
 
 .guide-marker {
   position: absolute;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
-  margin: -10px 0 0 -10px;
+  width: clamp(13px, 2.45cqw, 19px);
+  height: clamp(13px, 2.45cqw, 19px);
+  transform: translate(-50%, -50%);
   border-radius: 50%;
   background: #66b3ff;
   color: #071524;
-  font: 700 11px/1 var(--font-ui);
-  box-shadow: 0 0 0 2px #0b0d10;
+  font: 700 clamp(8.5px, 1.45cqw, 11px)/1 var(--font-ui);
+  box-shadow: 0 0 0 1.5px #0b0d10;
+  forced-color-adjust: none; /* part of the picture */
+  cursor: default;
+}
+
+.guide-marker.active {
+  background: #fff;
+  box-shadow: 0 0 0 2px #66b3ff, 0 0 10px #66b3ff;
+}
+
+/* the paddles' markers do not fit side by side in a narrow figure: two rows */
+@container (max-width: 520px) {
+  .guide-art {
+    margin-bottom: 14px;
+  }
+
+  .guide-marker.low {
+    transform: translate(-50%, calc(-50% + 13px));
+  }
 }
 
 .guide-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 8px 24px;
+  gap: 2px 24px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -822,15 +1636,20 @@ kbd {
 
 .guide-list li {
   position: relative;
-  padding-left: 30px;
+  padding: 3px 6px 3px 32px;
+  border-radius: 4px;
   counter-increment: guide;
+}
+
+.guide-list li.active {
+  background: var(--surface-2);
 }
 
 .guide-list li::before {
   content: counter(guide);
   position: absolute;
-  left: 0;
-  top: 1px;
+  left: 4px;
+  top: 4px;
   display: grid;
   place-items: center;
   width: 20px;
@@ -839,6 +1658,26 @@ kbd {
   background: #66b3ff;
   color: #071524;
   font: 700 11px/1 var(--font-ui);
+  forced-color-adjust: none;
+}
+
+@media (min-width: 900px), (min-width: 640px) and (max-height: 560px) {
+  .guide {
+    grid-template-columns: minmax(0, 1fr) clamp(280px, 34%, 420px);
+    gap: 20px;
+  }
+
+  .guide-figure {
+    top: 14px;
+  }
+
+  .guide-art {
+    margin: 0;
+  }
+
+  .guide-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ------------------------------------------------------------ banners and overlays */
@@ -879,6 +1718,7 @@ kbd {
   box-shadow: 0 16px 50px rgb(0 0 0 / 0.6);
 }
 
+
 .overlay-card h2 {
   margin: 0 0 6px;
   font-size: 16px;
@@ -896,24 +1736,104 @@ kbd {
   margin-top: 12px;
 }
 
+/* "Booting…": small, and placed by FirstRunOverlay.place() to keep clear of the boot messages */
+.overlay-card.compact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: center;
+  top: 0;
+  transform: translateX(-50%);
+  width: min(520px, calc(100% - 24px));
+  padding: 8px 10px 8px 14px;
+}
+
+.overlay-card.compact h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.overlay-card.compact p {
+  grid-column: 1;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.overlay-card.compact > div:not(.row) {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+}
+
+.overlay-card.compact .row {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  margin: 0;
+}
+
+.overlay-card.compact.below {
+  left: 0;
+  width: 100%;
+  background: var(--surface);
+  transform: none;
+}
+
+.stage[data-layout="wide"] .overlay-card.compact.below {
+  left: calc(var(--panel-w) + 20px);
+  width: calc(100% - var(--panel-w) - 30px);
+}
+
+.overlay-card.failure-card {
+  width: min(560px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  padding: 0;
+  overflow: auto;
+}
+
+.overlay-card.failure-card .failure {
+  border: 0;
+  border-left: 4px solid var(--danger);
+  background: rgb(36 20 18 / 0.98);
+}
+
+.overlay-card.failure-card p {
+  color: var(--text);
+}
+
 .ready-banner {
   position: absolute;
   z-index: 15;
-  left: 12px;
-  right: 12px;
+  left: 0;
+  right: 0;
   top: 0; /* set by ReadyBanner.place() */
-  width: fit-content;
-  margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 9px 12px 9px 14px;
   border: 1px solid #2c6b4d;
   border-radius: 8px;
-  background: rgb(12 32 22 / 0.95);
+  background: #0e2519;
   color: #d8f6e6;
   box-shadow: 0 8px 30px rgb(0 0 0 / 0.5);
   animation: rise 220ms ease-out;
+}
+
+.ready-banner > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+/* in the header beside the panel */
+.stage[data-layout="wide"] .ready-banner:not(.over) {
+  left: calc(var(--panel-w) + 20px);
+  right: 10px;
+}
+
+/* over the terminal: as narrow as its text */
+.ready-banner.over {
+  left: 12px;
+  right: 12px;
+  width: fit-content;
+  margin: 0 auto;
 }
 
 .ready-banner .help {
@@ -943,7 +1863,7 @@ kbd {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  max-width: min(420px, calc(100vw - 24px));
+  max-width: min(420px, calc(100vw - 24px), var(--toast-w, 420px));
   padding: 8px 8px 8px 12px;
   border: 1px solid var(--border);
   border-left: 4px solid var(--focus);
@@ -962,6 +1882,14 @@ kbd {
 .toast .toast-x { flex: none; min-width: 24px; height: 24px; }
 .toast .toast-action { flex: none; height: 24px; padding: 0 8px; font-size: 12.5px; }
 .toast.leaving { opacity: 0; transition: opacity 150ms; }
+
+/* in a narrow margin the text keeps the width, its button goes under it */
+.toasts.narrow .toast { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.toasts.narrow .toast .toast-text { grid-area: 1 / 1; }
+.toasts.narrow .toast .toast-x { grid-area: 1 / 2; }
+.toasts.narrow .toast .toast-action { grid-area: 2 / 1; justify-self: start; }
+.toasts.narrow .toast .toast-count { grid-area: 2 / 2; padding-top: 0; }
+.toasts.narrow .toast .toast-count:empty { display: none; }
 
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(6px); }
@@ -990,23 +1918,56 @@ kbd {
 
 /* ------------------------------------------------------------ readouts */
 
+/* A row of labelled octal numbers, in the red of the lamps they read */
 .readouts {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 4px 18px;
+  gap: 2px 18px;
+  height: 30px;
+  align-items: center;
   font: 13px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   color: var(--muted);
 }
 
+.readout {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
 .readouts b {
-  color: var(--text);
+  color: #ff6a58;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+}
+
+.stage[data-layout="side"] .readouts {
+  justify-content: flex-start;
+  gap: 4px 28px;
+  height: auto;
+  padding: 2px 2px 6px;
+}
+
+.stage[data-layout="side"] .readout {
+  flex-direction: column;
+  gap: 0;
+}
+
+.stage[data-layout="side"] .readout-label {
+  font: 11px var(--font-ui);
+  letter-spacing: 0.06em;
+}
+
+.stage[data-layout="side"] .readouts b {
+  font: 30px/1 "VT323", monospace;
+  letter-spacing: 0.05em;
+  text-shadow: 0 0 6px rgb(255 59 42 / 0.45);
 }
 
 /* ------------------------------------------------------------ tutorial */
 
+/* In the dock under the panel (main.js sizes it), else floating over the console */
 .tutorial {
   position: fixed;
   z-index: 40;
@@ -1018,33 +1979,59 @@ kbd {
   flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgb(22 24 27 / 0.97);
+  background: var(--surface);
   box-shadow: 0 16px 50px rgb(0 0 0 / 0.6);
+}
+
+.tutorial.docked {
+  max-height: none;
+  border-color: #3a3f45;
+  border-radius: 8px;
+  background: var(--surface-2);
+  box-shadow: none;
 }
 
 .tutorial header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 10px 8px 14px;
+  padding: 6px 8px 6px 14px;
   border-bottom: 1px solid var(--border);
   cursor: move;
+  touch-action: none;
 }
 
 .tutorial header h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
+}
+
+/* the handle says the card can be dragged */
+.tutorial header h2::before {
+  content: "⠿";
+  margin-right: 7px;
+  color: var(--muted);
 }
 
 .tutorial ol {
+  flex: 1 1 auto;
+  min-height: 0;
   margin: 0;
-  padding: 10px 14px 4px 34px;
+  padding: 8px 14px 2px 34px;
   overflow: auto;
 }
 
+.tutorial.docked ol {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  align-content: start;
+  gap: 2px 34px;
+}
+
 .tutorial li {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   color: var(--muted);
+  font-size: 13px;
 }
 
 .tutorial li.current {
@@ -1076,9 +2063,17 @@ kbd {
   color: #7fbf9a;
 }
 
-.tutorial .live {
-  padding: 8px 14px;
+.tutorial footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 6px 14px;
   border-top: 1px solid var(--border);
+}
+
+.tutorial .live {
+  flex: 1 1 auto;
   font: 12.5px ui-monospace, Menlo, Consolas, monospace;
   color: var(--muted);
 }
@@ -1087,10 +2082,20 @@ kbd {
   color: var(--text);
 }
 
-.tutorial footer {
+.tutorial .buttons {
   display: flex;
   gap: 8px;
-  justify-content: flex-end;
-  padding: 10px 14px;
-  border-top: 1px solid var(--border);
+  margin-left: auto;
+}
+
+/* a phone: a sheet over the bottom of the window, the panel stays in view above it */
+@media (max-width: 699px), (max-height: 419px) {
+  .tutorial {
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: 8px;
+    width: auto;
+    max-height: 48vh;
+  }
 }

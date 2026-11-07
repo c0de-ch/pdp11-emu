@@ -98,7 +98,8 @@ downloads are built in (§7).
 
 Exported beyond `internal/api` (additive, kept): `panel.(*Panel).PowerStatus`,
 `SubscribeHints`, `SubscribeProgress`, `ShutdownOS(ctx)` (`PANEL_LOGIC.md` §6);
-`web.(*Server).Close`, `Serve` (on a listener the caller bound);
+`web.(*Server).Close`, `Serve` (on a listener the caller bound),
+`web.CheckOptions` (the settings `serve` refuses before it starts, §5);
 `simh.RunHeader`, `SpeedCommands`, `TerminalsAttach`, `CheckPath` (the single
 definition of the generated run.ini parts), `RunConfig.Release` and
 `(*Machine).Close`, `Log`, `PanelSource`; `systems.(*Manager).Close`,
@@ -140,9 +141,10 @@ Booleans accept `1/true/yes/on` and `0/false/no/off`; an empty flag value
 (`--autostart=`) is false, and every flag needs a value (a bare `--autostart`
 is a usage error). Every sub-command
 accepts all flags; flags override the environment. An invalid
-`PDP11_ALLOW_ORIGINS`, `PDP11_HOSTS`, `PDP11_FRAME_ANCESTORS` or
-`PDP11_TRUSTED_PROXIES` value stops `serve` before the machine starts (exit
-status 1, with a message naming the setting). Paths SimH receives as
+`PDP11_ALLOW_ORIGINS`, `PDP11_HOSTS`, `PDP11_FRAME_ANCESTORS`,
+`PDP11_TRUSTED_PROXIES` or `PDP11_WEB` value stops `serve` before it touches the
+data directory (exit status 2 like every configuration error, with a message
+naming the setting; `web.CheckOptions`). Paths SimH receives as
 command arguments must not contain blanks, quotes or `;`: such a `PDP11_SHM`,
 `PDP11_DATA` (the disk images live below it) or `PDP11_TTY_TELNET` is rejected
 at start, and `PrepareRun` checks every image path again. The simulator
@@ -213,7 +215,9 @@ powered on.
    client started is waited for); else return `ErrNoSystem` (no state change,
    `LastError` explains; the UI offers the licence dialog). An install over a
    completed one (a working disk went missing) restores only the missing
-   disks (logged at warn); only a factory reset replaces the others.
+   disks (logged at warn, and a `warn` toast if other disks stay: their file
+   systems may not fit the restored one); only a factory reset replaces the
+   others.
 2. `PrepareRun` writes `$DATA/run/run.ini` = generated header + the system's
    `boot.ini` with `${DISKn}` replaced by absolute paths of the working copies
    (all of which must exist; "the next power-on restores it", step 1). It fails while the
@@ -376,7 +380,8 @@ covers the rest.
 
 **Console stream.** One TCP connection per power cycle; if SimH drops it
 mid-session it is re-established (1 s delay; with NOTELNET nothing is replayed
-twice). Output goes to a 256 KiB history ring (kept across power cycles) and
+twice). Output goes to a 256 KiB history ring (kept across power cycles, emptied
+by a system switch with `Reset`, `PROTOCOL.md` §1) and
 subscribers; `SubscribeHistory` is atomic. Input: `Write` returns
 `ErrNotPowered` while not connected and `ErrInputFull` beyond 64 KiB queued;
 the first 32 bytes of a burst are written at once, then paced at `InputCPS`
@@ -425,7 +430,7 @@ Fields beyond the obvious: `license.class` (`redistributable` — Unix V5-V7, 2.
 `hobbyist` — Mentec hobbyist licence, user must accept the text before install),
 `credentials` or `noLogin` (the console needs no login: RT-11, RSX-11M-PLUS whose
 console comes up logged in; `SystemInfo.noLogin`, `UI.md` §2), `shutdown` (text),
-`shutdownScript` (expect/send steps typed on the console by "Shut down OS";
+`shutdownScript` (steps typed on the console by "Shut down OS", below;
 `SystemInfo.canShutdown` = a script exists), `notes` (markdown with `## Log in`,
 `## Things to try`, `## Shut down`), `console` key mapping (`backspace`:
 `del`|`bs`|`#`, `interrupt`: `ctrl-c`|`del`, `keyHelp`), `readyPattern`,
@@ -434,22 +439,74 @@ toast, `PANEL_LOGIC.md` §3), `terminals` (`device`, `lines`, `modem`, `enableHi
 `artifacts` (`url`, `mirrors`, `sha256`, `size`, `format`, `files[path, role,
 sha256, size, sparse]`), `tests.session` (boot matrix).
 
-**Matching.** `readyPattern` and every `expect` (shutdown script, session
-steps) are **literal, case-sensitive substrings** of the console output, like
-SimH `EXPECT` without `-r` (the RSX and RSTS prompts contain `( ) [ ] ? < >`).
-A step's `expect` only sees output produced after the previous step's `send`;
-the first step also sees the text after the last newline of the history (a
-prompt already on the screen counts).
+**Matching.** `readyPattern` and every `expect` and `expectAny` text (shutdown
+script, session steps) are **literal, case-sensitive substrings** of the console
+output, like SimH `EXPECT` without `-r` (the RSX and RSTS prompts contain
+`( ) [ ] ? < >`). A step's `expect` only sees output produced after the previous
+step's `send`; until the script has typed something it also sees the text after
+the last newline of the history (a prompt already on the screen counts). A
+match of `expect` is consumed (the next wait looks behind it), a match of
+`expectAny` is not.
 
-**Shutdown scripts.** Each step waits ≤ `timeoutSec` (default 30) for its
-`expect`, pauses 250 ms after the match (RSX and RSTS post their terminal read
-late), then types `send`. The last step says how the shutdown ends: with a
-`send` the OS halts itself (2.11BSD `shutdown -h now`, RSX `RUN $SHUTUP`; the
-CPU stops with `HALT instruction`, waited for ≤ 30 s); **expect-only** marks the
-safe point (Unix V5-V7 after the third `sync`, RSTS at INIT's `Option:`), after
-which pdp11d waits 3 s and powers off. Unix scripts type `root` first (logs in
-at `login:`, harmless in a shell). RT-11 has no script (`canShutdown` false:
-the UI offers only "Pull the plug").
+**Shutdown scripts** are typed on a console that may be in any state, and a
+user's work matters more than a clean stop: a script looks before it types, and
+types nothing it cannot answer for. No script sends an interrupt. A step does
+the following, in this order; each field is optional:
+
+* `ifLineEnds` (a list of texts): the step runs only if the console output ends
+  in one of them; otherwise it is skipped. pdp11d judges the console once it
+  has been silent for 300 ms with no typed input left to send (at most 2 s: a
+  console that keeps printing is judged as it is). It compares the end of the
+  output (1 KiB) as a reader of the screen takes it: every run of line ends is
+  one `\n`, so blank lines do not count; a backspace takes the character before
+  it back; a cursor move to an absolute position or down a line (vi, jove) counts
+  as a line end; NUL and DEL fill, other control characters and terminal controls
+  are gone; and lines of 2.11BSD's syslog at the very end do not count (`Mar 30
+  02:31:38 pdp11 login: ROOT LOGIN ON tty00`: printed where the cursor is, usually
+  after a prompt, which still holds). In a text `\n` stands for a line end and
+  `*` for anything on the same line: `\n# ` is a line that holds exactly `# `,
+  `Ready\n` says `Ready` is the last line with text and nothing was typed after
+  it, and `\nlogin: *` is the login prompt with or without a half-typed name.
+  `catalogcheck` refuses other control characters and a text without any text in
+  it.
+* `expect`, or `expectAny` (at least two texts, the first that appears ends the
+  wait): wait ≤ `timeoutSec` (default 30).
+* `send`: typed, 250 ms after a match (RSX and RSTS post their terminal read
+  late). `catalogcheck` refuses an interrupt here (Ctrl+C, Ctrl+\\, DEL), and any
+  other control character but a line end in a step without `ifLineEnds`.
+* `else`: when `ifLineEnds` does not hold or the wait times out, the script
+  fails at once with this text, which says what to do: a `warn` toast for "Shut
+  down OS" (the power stays on), a warning in the log for a daemon stop (§6), which
+  powers off. Without it a wait that times out fails with "… did not appear on
+  the console".
+
+The first step of a script must check the console and say what to do otherwise
+(`ifLineEnds` and `else`); later conditional steps fall through, so one list
+serves every starting state. The last step has no condition and says how the
+shutdown ends: with a `send` the OS halts itself (2.11BSD `shutdown -h now`, RSX
+`RUN $SHUTUP`; the CPU stops with `HALT instruction`, waited for ≤ 30 s);
+**expect-only** marks the safe point (Unix V5-V7 after the third `sync`, RSTS at
+INIT's `Option:`), after which pdp11d waits 3 s and powers off. RT-11 has no
+script (`canShutdown` false: the UI offers only "Pull the plug").
+
+What the catalog's scripts do from each console state (`systems/README.md` has
+the prompts):
+
+| Console | 2.11BSD, UNIX V5-V7 | RSX-11M-PLUS | RSTS/E |
+|---|---|---|---|
+| at the login prompt, or logged out | logs in as root | logs in as SYSTEM after `RUN $SHUTUP` is refused | logs in as 1,2 |
+| half-typed login name | clears it (`^U`, V5-V7 `@`), logs in as root | a half-typed `HELLO`: clears it (`^U`) | a half-typed `HELLO`: clears it (`^U`), logs in as 1,2 |
+| root or privileged shell | goes on | goes on | at `Ready`: logs in as 1,2 again |
+| another user's idle shell | logs out (`^D`), logs in as root (pl499's user prompt `> ` is also a shell's continuation prompt: fails at once, nothing typed) | logs out (`BYE`), logs in as SYSTEM | at `Ready`: logs in as 1,2 |
+| suspended jobs keep that user logged in (2.11BSD) | fails at once | | |
+| inside a program, half-typed command, running program, password prompt, anything else | fails at once, nothing typed | fails at once, nothing typed | fails at once, nothing typed |
+| root has a password the script does not know | fails at once at `Password:` | fails at once | fails at once |
+
+A program that shows exactly a prompt's text on its last line (`# ` typed at the
+start of a line in vi's insert mode) cannot be told from a shell: the script
+then types into it (the program gets those lines), and the next prompt it waits
+for times out. Any other message printed after a prompt cannot be told from a
+program either, and fails at once: Return brings a fresh prompt.
 
 **Install**: for each artifact look in `$DATA/cache`, each `PDP11_CACHE`
 directory (files named by sha256), `$DATA/import` (any regular, non-hidden file
@@ -486,7 +543,10 @@ and only a factory reset replaces those. Once `serve` or `install` holds the
 data directory's lock it deletes what a crash left and nothing else would
 remove: `systems/**/*.part` and `cache/.<sha256>.copy-*`; a partial download
 stays and is resumed. Errors name the file,
-size, sha256 and every URL tried (and the import directory). Installs are
+size, sha256 and every URL tried (and the import directory); a failed task also
+says in plain words what happened and what to do (`api.TaskFailure`: the
+`error` progress and the system's entry until the next task,
+`PROTOCOL.md` §1.2). Installs are
 serialized (others wait, "Waiting for another installation to finish"; a
 second install of the same id → `ErrBusy`); installing an installed system
 reports `done` at once; progress is published to all subscribers; at the end
@@ -684,9 +744,10 @@ User documentation: `README.md` (Docker, compose, native install) and
   systemd unit set `PDP11_SHUTDOWN_ON_STOP=1` and allow pdp11d ≥ 75 s to stop
   (§6): `compose.yaml` and the unit use 90 s; a plain `docker run`/`docker stop`
   needs `--stop-timeout 90`/`-t 90` (Docker's default is 10 s). A clean 2.11BSD
-  shutdown takes 12-16 s; after an unclean stop the next boot takes 20-35 s
+  shutdown takes 15-18 s; after an unclean stop the next boot takes 20-35 s
   longer (fsck and a self-reboot: 30-45 s to `login:` instead of 10; `dialog.ini`
-  answers fsck's "RUN fsck MANUALLY" with `fsck -y`). The code default stays
+  answers fsck's "RUN fsck MANUALLY" with `fsck -y`, and stops at a root shell
+  when a disk cannot be repaired, `systems/README.md`). The code default stays
   `false`.
 * **Docker** (`Dockerfile`, `.dockerignore` keeps `simh/src`, `simh/out`, local
   data and dev tooling out of the context): every stage that compiles runs on the
@@ -793,7 +854,10 @@ running it needs arm64 hardware or an emulator.
   empty data directory: autostart to ready, the session typed over the
   WebSocket, panel frames, `shutdownOS`; 2.11BSD also restarts without fsck, a
   telnet login on a DZ line and a SIGTERM with `PDP11_SHUTDOWN_ON_STOP`;
-  `-clock` also checks the clocks of the Unix guests, RT-11 and RSX).
+  `-clock` also checks the clocks of the Unix guests, RT-11 and RSX). `-run
+  TestShutdownStates` with the same flags stops every system with a shutdown
+  script from every console state of §7, with `shutdownOS` and with SIGTERM;
+  `-run TestFsckRepair` boots 2.11BSD on a repairable and on an unrepairable disk.
 * `python3 -I simh/test/run_tests.py` (`SIMH_PATCH.md` §7).
 * `python3 -I tests/systems/bootmatrix.py` (every catalog entry: boot, session,
   idle CPU, shutdown script, optionally the terminal lines and, with

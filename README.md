@@ -7,10 +7,12 @@ work like the real ones, and a menu of historic operating systems. 2.11BSD
 boots by default; UNIX V5, V6 and V7, a newer 2.11BSD, RT-11, RSX-11M-PLUS and
 RSTS/E are a click away.
 
-<!-- Screenshots (to be added; tests/e2e takes them on every run): docs/img/main-view.png
-     (panel and console side by side, the e2e shot f-main-1920x1080.png),
-     docs/img/front-panel.png (the panel while 2.11BSD idles, f-panel-1340.png),
-     docs/img/toggle-in.png (the light chaser, c-light-chaser.png). -->
+![The web UI: the PDP-11/70 front panel next to the console, 2.11BSD at its login prompt](docs/img/main-view.png)
+
+<p>
+<img src="docs/img/front-panel.png" alt="The front panel while 2.11BSD idles: the DATA lamps show its idle pattern" width="49%">
+<img src="docs/img/toggle-in.png" alt="The toggle-in tutorial: a program deposited from the switches runs a light along the DATA lamps" width="49%">
+</p>
 
 Under the hood it is [Open SIMH](https://github.com/open-simh/simh) with a small
 patch that exports what the real front panel shows (bus cycles weighted by
@@ -216,15 +218,18 @@ incandescent or reduced motion; console colour: green, amber or white; 132
 columns; Authentic keys; Screen reader mode; …), the pop-out buttons,
 **Help** and a status pill (run state, ready, executed instructions per
 second, the number of viewers, the connection). The panel and the console sit
-side by side on a wide screen and are stacked on a narrow one; no page
-scrolling at 1366×768 and larger; small windows scroll rather than shrink the
-console below a readable size.
+side by side on a wide screen, with their edges in line, and are stacked on a
+narrow one; no page scrolling at 1366×768 and larger; small windows scroll
+rather than shrink the console below a readable size. Below them the dock holds
+the console's controls, the login and keys of the selected system and things to
+try on it, how to work the panel, and the toggle-in tutorial while it is open.
 
 Powering off, booting while the CPU runs or switching systems asks first and
-offers **Shut down the OS first (recommended)**, **Pull the plug** or
+offers **Shut down the OS first** (recommended), **Pull the plug** or
 **Cancel**. "Shut down OS" types the system's shutdown commands on the console
 (2.11BSD: `sync`, `shutdown -h now`), waits for the OS to halt the CPU and
-then powers off. RT-11 has nothing to shut down, so it only offers "Pull the
+then powers off; it looks at the console first and types nothing into a program
+([Troubleshooting](#troubleshooting)). RT-11 has nothing to shut down, so it only offers "Pull the
 plug". The same confirmations cover an OS halted from the panel: it is still
 in memory, and **Continue and shut down** lets it run again and shuts it down.
 
@@ -346,8 +351,9 @@ a light that walks across the DATA lamps on the DISPLAY REGISTER:
 
 ### Keyboard shortcuts
 
-Front panel (while it has the focus; Tab moves between the switch row, the
-knobs and the key):
+Front panel (while it has the keyboard focus: press Tab or Shift+Tab until the
+focus ring shows on a switch, a mouse click on the panel leaves the keyboard in
+the console; Tab moves between the switch row, the knobs and the key):
 
 | Keys | |
 |---|---|
@@ -567,18 +573,26 @@ pdp11.example.com {
   if the disks were being written, when files being written can also be lost
   (`/lost+found`). At Authentic speed the repair takes 11-13 minutes and the
   boot-timeout warning comes first: do not power off, switch to Fast until
-  `login:` appears (about a minute). UNIX V5-V7 may lose recent writes. Use "Shut
+  `login:` appears (about a minute). A disk fsck cannot repair stops the boot at a
+  root shell with "fsck cannot repair this disk" on the console (the boot-timeout
+  warning comes too). UNIX V5-V7 may lose recent writes. Use "Shut
   down OS", `docker stop -t 90` or `systemctl stop pdp11d`. "Factory reset" in
   the system chooser restores a broken system's disks.
-* **A clean stop needs a prompt**: the script is typed on the console, so it works
-  at `login:` and at a root `#` prompt. With the console logged in as another
-  user, inside a program such as `vi` or with a half-typed login name it times out
-  after 30 s: "Shut down OS" then leaves the power on and says so, while a stop of
-  the container or the service powers off uncleanly (the log says "guest OS shutdown
-  incomplete"). Log out on the console first.
-* **Downloads fail**: the error names every URL tried. Download the archive by
-  hand and drop it into `$PDP11_DATA/import/`, or build the image with
-  `--build-context archives=DIR`.
+* **A clean stop needs a prompt**: the script is typed on the console, so it looks
+  there first. It goes on from the login prompt (a half-typed name is cleared), from a
+  root shell and from another user's idle shell, which it logs out (not on 2.11BSD
+  patch level 499, whose user prompt `> ` could be a shell waiting for more input); RSX and RSTS log
+  in with their documented accounts when they need to. It types nothing into a program:
+  inside `vi`, with a half-typed command, while a program runs or with anything else
+  on the last line "Shut down OS" says so at once and leaves the power on, while a
+  stop of the container or the service powers off uncleanly right away (the log says
+  "guest OS shutdown incomplete" and why). Leave the program, clear the line and try
+  again. It stops the same way when a login asks for a password it does not know, and
+  when suspended jobs keep a 2.11BSD user logged in.
+* **Downloads fail**: the first-run card or the system's card in the chooser
+  says what happened and what to do; "Technical details" names every URL tried.
+  Download the archive by hand and drop it into `$PDP11_DATA/import/`, or build
+  the image with `--build-context archives=DIR`.
 * **Permission denied on `/data`** with a bind mount: `chown -R 10001:10001 DIR`.
 * **Power-on fails with "PANEL: ... is open to other users (mode 0644; it
   must be 0600)"**: the panel export (`PDP11_SHM`) must be a regular file of
@@ -592,7 +606,12 @@ pdp11.example.com {
 * **Native service does not start**: `install.sh` says so when
   `pdp11d.service` fails right after the start; `journalctl -u pdp11d -n 50`
   shows why (a port in use, a data directory that another pdp11d uses, a bad
-  setting). Status 226/NAMESPACE in an LXC container: sandboxing options
+  setting). A bad setting ends pdp11d with exit status 2 and a message naming
+  it, before it touches the data directory, and the unit does not restart on
+  that status: fix the setting, then `systemctl start pdp11d`. (Compose's
+  `restart: unless-stopped` has no such exception: the container keeps restarting
+  until the setting is fixed, and `docker compose logs` names it.) Status
+  226/NAMESPACE in an LXC container: sandboxing options
   (`ProtectSystem=`, `PrivateTmp=`, ...) were added in a drop-in under
   `/etc/systemd/system/pdp11d.service.d/`; remove them and run `systemctl
   daemon-reload`.

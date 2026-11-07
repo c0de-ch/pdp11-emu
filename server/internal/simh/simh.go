@@ -746,11 +746,11 @@ func (m *Machine) bringUp(ctx context.Context, s *session) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(m.to.startup):
-		return fmt.Errorf("the simulator did not reach its prompt within %s (output: %s)", m.to.startup, s.recentOutput())
+		return errors.New(s.withOutput(fmt.Sprintf("the simulator did not reach its prompt within %s", m.to.startup), "; output: "))
 	}
 	if s.first.err != nil {
 		s.waitExit(time.Second)
-		return fmt.Errorf("the simulator exited during start-up (%s): %s", s.exitStatus(), s.recentOutput())
+		return errors.New(s.withOutput(fmt.Sprintf("the simulator exited during start-up (%s)", s.exitStatus()), ": "))
 	}
 	if err := m.checkStartup(s); err != nil {
 		return err
@@ -1041,7 +1041,7 @@ func (m *Machine) onSessionExit(s *session) {
 	if !current {
 		return
 	}
-	m.fail(s, fmt.Sprintf("the simulator exited unexpectedly (%s); last output: %s", s.exitStatus(), s.recentOutput()))
+	m.fail(s, s.withOutput(fmt.Sprintf("the simulator exited unexpectedly (%s)", s.exitStatus()), "; last output: "))
 }
 
 // Halt stops the CPU after the current instruction (no-op when halted).

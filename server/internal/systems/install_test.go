@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -504,7 +506,10 @@ func TestInstallKeepsSurvivingDisks(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Remove(filepath.Join(dir, "b.dsk"))
-	if err := m.Install(context.Background(), "tar", false, ""); err != nil {
+	var pl progressLog
+	cancel := m.SubscribeProgress(pl.add)
+	defer cancel()
+	if err := m.Install(context.Background(), "tar", false, "r7"); err != nil {
 		t.Fatal(err)
 	}
 	if !m.Installed("tar") {
@@ -515,6 +520,19 @@ func TestInstallKeepsSurvivingDisks(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
 		t.Fatalf("left over: %v", entries)
+	}
+	// The users hear that one pristine disk now stands next to modified ones.
+	warnings := 0
+	for _, ev := range pl.ev {
+		if ev.Phase == "warning" {
+			warnings++
+			if !strings.Contains(ev.Text, "the disk b.dsk was missing") || !strings.Contains(ev.Text, "Factory reset") || ev.Req != "r7" {
+				t.Fatalf("warning %+v", ev)
+			}
+		}
+	}
+	if warnings != 1 {
+		t.Fatalf("%d warnings, phases %v", warnings, pl.phases("tar"))
 	}
 	// A repair that fails half way keeps the marker: the next one still is a
 	// repair, not an install over the surviving disk.
@@ -542,6 +560,31 @@ func TestInstallKeepsSurvivingDisks(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkInstalled(t, f, m, "tar")
+}
+
+// A repair that replaces every disk, as with a single one, leaves nothing that
+// could disagree with it: no warning.
+func TestRepairOfTheOnlyDiskIsNoWarning(t *testing.T) {
+	f := newFixture(t, defaultSpecs())
+	m := f.manager()
+	if err := m.Install(context.Background(), "raw", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(m.SystemDir("raw"), "disk.img")); err != nil {
+		t.Fatal(err)
+	}
+	var pl progressLog
+	cancel := m.SubscribeProgress(pl.add)
+	defer cancel()
+	if err := m.Install(context.Background(), "raw", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Installed("raw") {
+		t.Fatal("not installed after the repair")
+	}
+	if got := pl.phases("raw"); slices.Contains(got, "warning") {
+		t.Fatalf("phases %v", got)
+	}
 }
 
 func TestFetch(t *testing.T) {
@@ -1035,6 +1078,155 @@ func TestModes(t *testing.T) {
 			t.Error(err)
 		} else if fi.Mode().Perm() != want {
 			t.Errorf("%s: mode %v, want %v", p, fi.Mode().Perm(), want)
+		}
+	}
+}
+
+// TestFailureExplained: a failed install says what happened and what to do,
+// to everyone (progress) and for later viewers (the system's entry), until
+// the next attempt; the raw error stays available as the detail.
+func TestFailureExplained(t *testing.T) {
+	failed := func(t *testing.T, f *fixture, m *Manager) (*progressLog, *api.TaskFailure, error) {
+		t.Helper()
+		pl := &progressLog{}
+		m.SubscribeProgress(pl.add)
+		err := m.Install(context.Background(), "v6", false, "r7")
+		if err == nil {
+			t.Fatal("Install succeeded")
+		}
+		if !errors.Is(err, api.ErrReported) {
+			t.Errorf("not marked as reported: %v", err)
+		}
+		last := pl.last("v6")
+		if last.Phase != "error" || last.Failure == nil || last.Req != "r7" || last.Text != err.Error() {
+			t.Fatalf("last progress %+v, error %v", last, err)
+		}
+		info, _ := m.Get("v6")
+		if info.Failure == nil || *info.Failure != *last.Failure {
+			t.Fatalf("system entry %+v, progress %+v", info.Failure, last.Failure)
+		}
+		if info.Failure.Task != "install" || info.Failure.Detail != err.Error() {
+			t.Fatalf("failure %+v", info.Failure)
+		}
+		return pl, info.Failure, err
+	}
+	checks := func(t *testing.T, s string, want ...string) {
+		t.Helper()
+		for _, w := range want {
+			if !strings.Contains(s, w) {
+				t.Errorf("%q lacks %q", s, w)
+			}
+		}
+	}
+	t.Run("server down: the reason, the attempts and the way by hand", func(t *testing.T) {
+		f := newFixture(t, defaultSpecs()[1:2])
+		m := f.manager()
+		a, _ := f.archive("v6")
+		f.srv.Close()
+		pl, fl, _ := failed(t, f, m)
+		checks(t, fl.Summary, "could not be reached", "connection refused")
+		checks(t, fl.Hint, "reach the internet", "`v6.zip`", sizeText(a.Size), "["+a.URL+"]("+a.URL+")", "`"+m.importDir()+"`")
+		// what the wait is about: the host, then each failed attempt
+		var notes []string
+		for _, p := range pl.all("v6") {
+			if p.Phase == "download" && p.Bytes == 0 {
+				notes = append(notes, p.Text)
+			}
+		}
+		host, _ := url.Parse(a.URL)
+		want := []string{
+			"Connecting to " + host.Hostname() + "…",
+			"Attempt 1 of 3 failed (connection refused); trying again in 0 s…",
+			"Connecting to " + host.Hostname() + "…",
+			"Attempt 2 of 3 failed (connection refused); trying again in 0 s…",
+			"Connecting to " + host.Hostname() + "…",
+		}
+		if fmt.Sprint(notes) != fmt.Sprint(want) {
+			t.Errorf("notes %q, want %q", notes, want)
+		}
+	})
+	t.Run("the server answers with an error", func(t *testing.T) {
+		f := newFixture(t, defaultSpecs()[1:2])
+		f.setHandler("/v6.zip", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+		})
+		_, fl, _ := failed(t, f, f.manager())
+		checks(t, fl.Summary, "The download of v6.zip stopped", "HTTP 503")
+		checks(t, fl.Hint, "reach the internet", "`v6.zip`")
+	})
+	t.Run("gone from the server", func(t *testing.T) {
+		f := newFixture(t, defaultSpecs()[1:2])
+		delete(f.content, "/v6.zip")
+		_, fl, _ := failed(t, f, f.manager())
+		checks(t, fl.Summary, "does not have v6.zip any more", "HTTP 404")
+		checks(t, fl.Hint, "If you have a copy", "`v6.zip`")
+	})
+	t.Run("a refusal is not called gone", func(t *testing.T) {
+		e := &downloadError{attempts: []downloadAttempt{{err: permanentError{errors.New("HTTP 403 Forbidden")}}}}
+		summary, _ := e.explain("/import")
+		checks(t, summary, "cannot provide", "HTTP 403")
+	})
+	t.Run("another file on the server", func(t *testing.T) {
+		f := newFixture(t, defaultSpecs()[1:2])
+		f.content["/v6.zip"][100] ^= 1
+		_, fl, _ := failed(t, f, f.manager())
+		checks(t, fl.Summary, "different file", "v6.zip")
+		checks(t, fl.Hint, "replaced", "`v6.zip`")
+	})
+	t.Run("no disk space", func(t *testing.T) {
+		f := newFixture(t, defaultSpecs()[1:2])
+		m := f.manager()
+		freeSpaceOf = func(string) (int64, error) { return 1000, nil }
+		defer func() { freeSpaceOf = freeSpace }()
+		_, fl, _ := failed(t, f, m)
+		checks(t, fl.Summary, "not enough free disk space", "needed", "available")
+		checks(t, fl.Hint, "Free some space", m.SystemDir("v6"))
+	})
+	t.Run("the next attempt clears it", func(t *testing.T) {
+		f := newFixture(t, defaultSpecs()[1:2])
+		body := f.content["/v6.zip"]
+		delete(f.content, "/v6.zip")
+		m := f.manager()
+		failed(t, f, m)
+		f.content["/v6.zip"] = body
+		if err := m.Install(context.Background(), "v6", false, ""); err != nil {
+			t.Fatal(err)
+		}
+		if i, _ := m.Get("v6"); i.Failure != nil || !i.Installed {
+			t.Fatalf("after the retry: %+v", i)
+		}
+	})
+}
+
+// TestTaskKindInSystemEntry: viewers can tell a factory reset from an install.
+func TestTaskKindInSystemEntry(t *testing.T) {
+	f := newFixture(t, defaultSpecs()[1:2])
+	m := f.manager()
+	if err := m.Install(context.Background(), "v6", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if i, _ := m.Get("v6"); i.Task != "" {
+		t.Fatalf("idle: task %q", i.Task)
+	}
+	disk := filepath.Join(m.SystemDir("v6"), filepath.Base(f.files["v6"][1].name))
+	unblock := blockAt(t, disk+".part")
+	errc := make(chan error, 1)
+	go func() { errc <- m.FactoryReset(context.Background(), "v6", "") }()
+	waitFor(t, func() bool { i, _ := m.Get("v6"); return i.Task == "factoryReset" && i.Installing })
+	m.Cancel("v6")
+	unblock()
+	if err := <-errc; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if i, _ := m.Get("v6"); i.Task != "" || i.Installing || i.Failure != nil {
+		t.Fatalf("after the reset: %+v", i)
+	}
+}
+
+func TestSizeText(t *testing.T) {
+	for n, want := range map[int64]string{0: "0 B", 999: "999 B", 1000: "1.0 KB", 24201968: "24.2 MB", 123456789: "123 MB", 1000448512: "1.0 GB"} {
+		if got := sizeText(n); got != want {
+			t.Errorf("sizeText(%d) = %q, want %q", n, got, want)
 		}
 	}
 }

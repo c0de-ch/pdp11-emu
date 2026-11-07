@@ -285,6 +285,14 @@ func (s *session) recentOutput() string {
 	return strings.Join(s.tail, " | ")
 }
 
+// withOutput appends the simulator's recent output to msg, when it printed anything.
+func (s *session) withOutput(msg, sep string) string {
+	if out := s.recentOutput(); out != "" {
+		return msg + sep + out
+	}
+	return msg
+}
+
 // waitExit waits up to d for the process to exit.
 func (s *session) waitExit(d time.Duration) bool {
 	select {

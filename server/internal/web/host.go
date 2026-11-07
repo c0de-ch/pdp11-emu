@@ -59,7 +59,7 @@ func newHostCheck(hostname string, hosts, origins []string) (*hostCheck, error) 
 		case isIP(strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")):
 			// always allowed
 		case !validHostName(name):
-			return nil, fmt.Errorf(`web: PDP11_HOSTS: %q is not a host name (no scheme or port; "*.example.com" allows every subdomain)`, e)
+			return nil, fmt.Errorf(`PDP11_HOSTS: %q is not a host name (no scheme or port; "*.example.com" allows every subdomain)`, e)
 		case sub:
 			hc.suffixes = append(hc.suffixes, "."+name)
 			hc.allowed = append(hc.allowed, h)

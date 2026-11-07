@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -56,21 +57,66 @@ type permanentError struct{ error }
 
 func (e permanentError) Unwrap() error { return e.error }
 
+// downloadError says that no source delivered an archive.
+type downloadError struct {
+	archive  catalog.Artifact
+	attempts []downloadAttempt
+}
+
+type downloadAttempt struct {
+	url string
+	n   int // 1..attemptsPerURL
+	err error
+}
+
+func (e *downloadError) Error() string {
+	tried := make([]string, len(e.attempts))
+	for i, a := range e.attempts {
+		tried[i] = fmt.Sprintf("%s (attempt %d: %v)", a.url, a.n, a.err)
+	}
+	return fmt.Sprintf("cannot download %s (%d bytes, sha256 %s); tried %s", archiveName(e.archive), e.archive.Size, e.archive.SHA256, strings.Join(tried, "; "))
+}
+
+// briefError is the part of a download error that means something to the
+// person watching: "connection refused", not the whole request.
+func briefError(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	var oe *net.OpError
+	if errors.As(err, &oe) {
+		err = oe.Err
+	}
+	return strings.TrimPrefix(err.Error(), "connect: ")
+}
+
+// urlHost is the host name of a download URL, for a progress note.
+func urlHost(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return raw
+}
+
 // download tries the URL and then the mirrors, attemptsPerURL times each.
-func (d downloader) download(ctx context.Context, a catalog.Artifact, dir string, progress func(int64)) error {
+// progress gets the bytes received, note what it is doing between them.
+func (d downloader) download(ctx context.Context, a catalog.Artifact, dir string, progress func(int64), note func(string)) error {
 	part := filepath.Join(dir, strings.ToLower(a.SHA256)+".part")
 	final := filepath.Join(dir, strings.ToLower(a.SHA256))
-	var tried []string
+	failed := &downloadError{archive: a}
 	for _, u := range append([]string{a.URL}, a.Mirrors...) {
 		for attempt := 1; attempt <= attemptsPerURL; attempt++ {
 			if attempt > 1 {
 				wait := d.backoff[min(attempt-2, len(d.backoff)-1)]
+				note(fmt.Sprintf("Attempt %d of %d failed (%s); trying again in %d s…", attempt-1, attemptsPerURL, briefError(failed.attempts[len(failed.attempts)-1].err), int(wait.Round(time.Second).Seconds())))
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				case <-time.After(wait):
 				}
 			}
+			note("Connecting to " + urlHost(u) + "…")
 			err := d.fetch(ctx, u, part, a.Size, progress)
 			if err == nil {
 				if err = verifyFile(ctx, part, a.Size, a.SHA256, nil); err == nil {
@@ -82,14 +128,14 @@ func (d downloader) download(ctx context.Context, a catalog.Artifact, dir string
 				return ctx.Err()
 			}
 			d.log.Warn("download failed", "url", u, "attempt", attempt, "err", err)
-			tried = append(tried, fmt.Sprintf("%s (attempt %d: %v)", u, attempt, err))
+			failed.attempts = append(failed.attempts, downloadAttempt{url: u, n: attempt, err: err})
 			var perm permanentError
 			if errors.As(err, &perm) {
 				break
 			}
 		}
 	}
-	return fmt.Errorf("cannot download %s (%d bytes, sha256 %s); tried %s", archiveName(a), a.Size, a.SHA256, strings.Join(tried, "; "))
+	return failed
 }
 
 func (d downloader) fetch(ctx context.Context, u, part string, size int64, progress func(int64)) error {

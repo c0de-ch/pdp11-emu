@@ -10,7 +10,7 @@ package simh
 //
 // Directives in run.ini comments ("; fake: <word>[=<value>]") inject faults:
 // ignore-halt, crash-on-boot, expect-stop, late-output, no-prompt,
-// exit-on-start, slow-start=<ms>, halt-after=<ms>, sigterm-ignore.
+// exit-on-start, exit-silently, slow-start=<ms>, halt-after=<ms>, sigterm-ignore.
 
 import (
 	"bufio"
@@ -110,6 +110,9 @@ func fakeMain(args []string) int {
 			k, v, _ := strings.Cut(strings.TrimSpace(rest), "=")
 			f.dir[k] = v
 		}
+	}
+	if _, ok := f.dir["exit-silently"]; ok {
+		return 1
 	}
 	f.signals()
 	if ms, ok := f.dir["slow-start"]; ok {

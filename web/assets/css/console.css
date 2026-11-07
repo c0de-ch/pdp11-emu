@@ -1,5 +1,5 @@
-/* Console terminal: Glass TTY VT220 (Unlicense) and VT323 (OFL) for
-   non-integer scaling; phosphor colours come from --phosphor/-bg. */
+/* Console terminal: Glass TTY VT220 (Unlicense), VT323 (OFL) where Glass TTY
+   cannot fit; phosphor colours come from --phosphor/-bg. */
 
 @font-face {
   font-family: "Glass TTY VT220";
@@ -18,71 +18,239 @@
   --phosphor-bg: #041208;
 }
 
-/* the key help gives way first; when even the buttons do not fit (a narrow
-   console during a paste), they wrap onto a second line (main.js measures it) */
+/* The header sits under the terminal, in the dock: a bar of fixed height that
+   transient messages share, then the login and the key help. Above the terminal
+   only on a phone, where an on-screen keyboard covers what is below it. */
 .console-head {
+  order: 2;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-  min-height: 34px;
-  padding: 0 2px 6px;
-  font-size: 13px;
+  flex-direction: column;
+  min-width: 0;
+  margin-top: calc(var(--dock-gap, 0px) + 9px);
+  font-size: calc(13px * var(--ui));
 }
 
-.console-head .title {
-  font-weight: 600;
+.console-host {
+  order: 1;
+  position: relative;
+  flex: none;
 }
 
-.console-head .keyhelp {
+/* a console much wider than the panel: the header is a card beside the panel */
+.stage[data-layout="wide"] .console-head {
+  position: absolute;
+  left: calc(var(--panel-w) + 10px);
+  right: 0;
+  bottom: calc(100% + 10px);
+  height: var(--panel-h);
+  margin: 0;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+/* a phone: the bar above the terminal, the notes below it */
+.stage[data-layout="mobile"] .console-head {
+  display: contents;
+}
+
+.stage[data-layout="mobile"] .head-bar {
+  order: 0;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.stage[data-layout="mobile"] .head-bar .title {
+  display: none;
+}
+
+.stage[data-layout="mobile"] .head-info,
+.stage[data-layout="mobile"] .try-notes {
+  order: 2;
+  width: 100%;
+  margin-top: 6px;
+}
+
+/* the page scrolls: the notes do not need to */
+.stage[data-layout="mobile"] .try-notes {
+  flex: none;
+  overflow: visible;
+  mask-image: none;
+}
+
+.stage[data-layout="mobile"] .console-host {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* the message slot: gives way, never wraps the bar */
+.head-msg {
   flex: 1 1 0;
   min-width: 0;
-  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.console-head .toggle {
+.focus-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--muted);
   white-space: nowrap;
   cursor: pointer;
 }
 
-.console-head .paste-progress {
+.focus-chip::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #555b62;
+}
+
+.focus-chip .long {
+  white-space: pre;
+}
+
+/* the slot shows the whole message or a clean end, never a cut word */
+.focus-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* a narrow header bar keeps its buttons: "Typing" says enough, and a message
+   takes the place of the toggle (main.js sets the class) */
+.head-bar.narrow .focus-chip .long,
+.head-bar.narrow:has(.paste-progress:not([hidden])) .toggle {
+  display: none;
+}
+
+.focus-chip.on {
+  color: color-mix(in srgb, var(--phosphor) 70%, var(--text));
+}
+
+.focus-chip.on::before {
+  background: var(--phosphor);
+  box-shadow: 0 0 5px var(--phosphor);
+}
+
+.head-msg:has(.paste-progress:not([hidden])) .focus-chip {
+  display: none;
+}
+
+.paste-progress {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   color: var(--warn);
+}
+
+.paste-progress .paste-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.console-head .btn {
-  height: 26px;
-  padding: 0 9px;
+.head-info {
+  flex: none;
+  padding: 0 2px;
 }
 
-.console-host {
-  position: relative;
-  flex: none;
+.login-line {
+  margin: 2px 0 4px;
+  color: var(--muted);
+  font-size: calc(14px * var(--ui));
+}
+
+.login-line:empty {
+  display: none;
+}
+
+.login-line strong {
+  color: var(--text);
+}
+
+/* what to do with this system (from its notes), where the dock has room: scrolls */
+.try-notes {
+  flex: 1 1 0;
+  min-height: 0;
+  margin-top: 8px;
+  padding: 0 8px 14px 2px;
+  overflow-y: auto;
+  color: var(--muted);
+  scrollbar-width: thin;
+  /* more text below: it fades out at the window's edge */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+}
+
+.try-notes:empty {
+  display: none;
+}
+
+/* the ready banner repeats the login and the keys: they make way for it */
+.console-area:has(.ready-banner:not(.over)) .head-info,
+.console-area:has(.overlay-card.below) .head-info {
+  visibility: hidden;
+}
+
+.try-notes h3 {
+  margin: 0 0 3px;
+  color: var(--text);
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.try-notes ul,
+.try-notes ol {
+  margin: 0;
+  padding-left: 1.3em;
+}
+
+.try-notes li {
+  margin-bottom: 3px;
+}
+
+.try-notes p {
+  margin: 0 0 3px;
+}
+
+.try-notes code {
+  color: var(--text);
+  font: 0.94em ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+.try-notes pre {
+  width: fit-content;
+  max-width: 100%;
+  margin: 3px 0;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  background: #0c0d0f;
+  overflow-x: auto;
 }
 
 .console-frame {
   position: relative;
-  display: inline-block;
-  padding: 10px;
+  display: block;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--phosphor-bg);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.02);
-  transition: box-shadow 120ms ease-out;
+  transition: box-shadow 120ms ease-out, border-color 120ms ease-out;
 }
 
+/* the keyboard is here: the frame lights up in the phosphor's colour */
 .console-frame.focused {
-  border-color: #2f3a46;
+  border-color: color-mix(in srgb, var(--phosphor) 55%, var(--border));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--phosphor) 22%, transparent);
 }
 
 .console-frame.bell {
@@ -98,13 +266,25 @@
 }
 
 /* xterm.js 6 draws its scrollbar over the right edge of the text; with a
-   fixed 80/132-column screen give it a gutter of its own (SCROLLBAR in console.js) */
+   fixed 80/132-column screen give it a gutter of its own (GUTTER in console.js),
+   with a slim thumb that stays out of the way of the text */
 .console-screen .xterm {
   width: max-content;
 }
 
 .console-screen .xterm-scrollable-element {
-  padding-right: 14px;
+  padding-right: var(--gutter);
+}
+
+.console-screen .xterm-scrollable-element > .scrollbar.vertical {
+  width: var(--gutter) !important;
+}
+
+.console-screen .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  left: auto !important;
+  right: 1px;
+  width: min(5px, calc(var(--gutter) - 2px)) !important;
+  border-radius: 3px;
 }
 
 /* xterm.js: opaque phosphor background, no scrollbar gutter tint */
@@ -119,10 +299,28 @@
   outline: none;
 }
 
-/* CRT effect (DOM renderer only): glow on the text, vignette over the glass.
-   Never curvature or flicker (r4 §5.3). */
+/* Glass TTY's scan-line gaps dim its thin strokes, and where they come out dark
+   a "1" (a dot, then a stem) reads as an "i". As in a real tube the phosphor
+   partly fills them: a dim copy of the text one scan line (1/20 em) lower keeps
+   the text about as bright at every size. All of it in the text's own colour:
+   dim text stays dim and the dark letters of inverse video stay sharp. */
+.console-frame[data-font^="glass"] .xterm-rows {
+  text-shadow: 0 var(--scan-line) 0 color-mix(in srgb, currentcolor 60%, transparent);
+}
+
+/* CRT effect (DOM renderer only): glow on the text, a light vignette over the
+   glass that leaves the text in the corners readable. Never curvature or
+   flicker (r4 §5.3). */
 .console-frame.crt .xterm-rows {
-  text-shadow: 0 0 1px var(--phosphor), 0 0 5px color-mix(in srgb, var(--phosphor) 45%, transparent);
+  text-shadow: 0 0 1px color-mix(in srgb, currentcolor 70%, transparent), 0 0 5px color-mix(in srgb, currentcolor 25%, transparent);
+}
+
+.console-frame.crt[data-font^="glass"] .xterm-rows {
+  text-shadow:
+    0 var(--scan-line) 0 color-mix(in srgb, currentcolor 70%, transparent),
+    0 0 1px currentcolor,
+    0 0 2px color-mix(in srgb, currentcolor 60%, transparent),
+    0 0 7px color-mix(in srgb, currentcolor 40%, transparent);
 }
 
 .crt-overlay {
@@ -135,14 +333,16 @@
 
 .console-frame.crt .crt-overlay {
   opacity: 1;
-  background: radial-gradient(ellipse at center, transparent 62%, rgb(0 0 0 / 0.42));
-  box-shadow: inset 0 0 24px rgb(0 0 0 / 0.55);
+  background: radial-gradient(ellipse at center, transparent 75%, rgb(0 0 0 / 0.18));
+  box-shadow: inset 0 0 14px rgb(0 0 0 / 0.3);
 }
 
+/* "Click to type": the header bar says it; a kiosk has no header */
 .console-hint {
+  display: none;
   position: absolute;
-  right: 14px;
-  bottom: 12px;
+  right: calc(var(--gutter) + 8px);
+  top: 8px;
   padding: 2px 8px;
   border-radius: 10px;
   background: rgb(0 0 0 / 0.55);
@@ -153,6 +353,10 @@
   transition: opacity 150ms;
 }
 
+.app.kiosk .console-hint {
+  display: block;
+}
+
 .console-frame.focused .console-hint {
   opacity: 0;
 }
@@ -161,5 +365,56 @@
   .console-frame,
   .console-hint {
     transition: none;
+  }
+}
+
+/* Forced colours (Windows high contrast) paint every background in the screen's
+   own colour, drop shadows and put an opaque plate behind text, which would hide a
+   selection: the terminal paints itself, in the system's colours. Its font:
+   fontChoices() in console.js. */
+@media (forced-colors: active) {
+  .console-frame.focused {
+    outline: 2px solid Highlight;
+  }
+
+  .console-frame .console-screen .xterm .xterm-rows,
+  .console-frame .console-screen .xterm .xterm-rows span {
+    forced-color-adjust: none;
+    background-color: transparent !important;
+    color: CanvasText !important;
+    text-shadow: none;
+  }
+
+  /* inverse video */
+  .console-frame .console-screen .xterm .xterm-rows span[class*="xterm-bg-"] {
+    background-color: CanvasText !important;
+    color: Canvas !important;
+  }
+
+  /* the block cursor, steady: xterm.js would blink it in the theme's colours */
+  .console-frame .console-screen .xterm .xterm-rows span.xterm-cursor.xterm-cursor-block {
+    background-color: CanvasText !important;
+    color: Canvas !important;
+    animation: none;
+  }
+
+  .console-frame .console-screen .xterm .xterm-rows span.xterm-cursor.xterm-cursor-outline {
+    outline-color: CanvasText;
+  }
+
+  .console-frame .console-screen .xterm .xterm-rows span.xterm-cursor.xterm-cursor-bar {
+    box-shadow: 2px 0 0 CanvasText inset !important;
+    animation: none;
+  }
+
+  .console-frame .console-screen .xterm .xterm-rows span.xterm-cursor.xterm-cursor-underline {
+    border-bottom-color: CanvasText;
+    animation: none;
+  }
+
+  .console-frame .console-screen .xterm .xterm-selection div {
+    forced-color-adjust: none;
+    background-color: Highlight;
+    opacity: 0.5;
   }
 }

@@ -389,6 +389,7 @@ func TestStartupDiagnostics(t *testing.T) {
 		}}, []string{"terminal listener PDP11_TTY_TELNET", "Can't open network port"}},
 		{"exit during start-up", []harnessOpt{withDirectives("exit-on-start")}, []string{"exited during start-up", "fatal start-up problem"}},
 		{"no prompt", []harnessOpt{withDirectives("no-prompt")}, []string{"did not reach its prompt"}},
+		{"exit without a word", []harnessOpt{withDirectives("exit-silently")}, []string{"exited during start-up (exit status 1)"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -410,6 +411,9 @@ func TestStartupDiagnostics(t *testing.T) {
 				if !strings.Contains(h.m.LastError(), w) {
 					t.Errorf("LastError %q does not contain %q", h.m.LastError(), w)
 				}
+			}
+			if strings.HasSuffix(strings.TrimSpace(h.m.LastError()), ":") {
+				t.Errorf("LastError %q ends with a colon: the simulator printed nothing", h.m.LastError())
 			}
 			if h.pid() != 0 {
 				t.Fatal("simulator left running")
@@ -912,8 +916,8 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// TestStopsAreLogged: every stop the user can see is logged with its reason
-// (R29); a transparent stop (a speed change) is not.
+// TestStopsAreLogged: every stop the user can see is logged with its reason;
+// a transparent stop (a speed change) is not.
 func TestStopsAreLogged(t *testing.T) {
 	var logs lockedBuffer
 	h := newHarness(t, func(o *Options, _ *testProvider) {

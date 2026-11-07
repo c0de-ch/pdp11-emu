@@ -50,8 +50,9 @@ type Manager struct {
 
 	mu       sync.Mutex
 	state    persisted
-	tasks    map[string]*task // running install or factory reset, by system id
-	leases   map[string]int   // simulators using a system's images (PrepareRun until they exited)
+	tasks    map[string]*task            // running install or factory reset, by system id
+	failures map[string]*api.TaskFailure // why the last task failed, by system id
+	leases   map[string]int              // simulators using a system's images (PrepareRun until they exited)
 	progSubs []progressSub
 	chgSubs  []changeSub
 	nextID   uint64
@@ -108,6 +109,7 @@ func New(cat *catalog.Catalog, opts Options) (*Manager, error) {
 		opts:       opts,
 		log:        opts.Logger.With("component", "systems"),
 		tasks:      map[string]*task{},
+		failures:   map[string]*api.TaskFailure{},
 		leases:     map[string]int{},
 		installing: make(chan struct{}, 1),
 		dirty:      make(chan struct{}, 1),
@@ -234,8 +236,13 @@ func (m *Manager) info(s *catalog.System) api.SystemInfo {
 		creds = append(creds, api.Credential{User: c.User, Password: c.Password, Note: c.Note})
 	}
 	m.mu.Lock()
-	_, installing := m.tasks[s.ID]
+	t, installing := m.tasks[s.ID]
+	failure := m.failures[s.ID]
 	m.mu.Unlock()
+	kind := ""
+	if installing {
+		kind = t.kind
+	}
 	return api.SystemInfo{
 		ID:            s.ID,
 		Name:          s.Name,
@@ -246,6 +253,8 @@ func (m *Manager) info(s *catalog.System) api.SystemInfo {
 		Default:       s.Default,
 		Installed:     !installing && m.Installed(s.ID),
 		Installing:    installing,
+		Task:          kind,
+		Failure:       failure,
 		DownloadBytes: dl,
 		DiskBytes:     disk,
 		License: api.LicenseInfo{
@@ -367,7 +376,8 @@ func (m *Manager) ShutdownScript(id string) []api.ScriptStep {
 	}
 	out := make([]api.ScriptStep, len(s.ShutdownScript))
 	for i, st := range s.ShutdownScript {
-		out[i] = api.ScriptStep{Expect: st.Expect, Send: st.Send, TimeoutSec: st.TimeoutSec}
+		out[i] = api.ScriptStep{IfLineEnds: st.IfLineEnds, Expect: st.Expect, ExpectAny: st.ExpectAny,
+			Send: st.Send, Else: st.Else, TimeoutSec: st.TimeoutSec}
 	}
 	return out
 }

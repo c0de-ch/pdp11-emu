@@ -213,8 +213,13 @@ func (c *client) onSelect(id, req string) {
 		c.toast("warn", hint, req)
 		return
 	}
+	prev := s.deps.Systems.Selected()
 	switch err := s.deps.Systems.Select(id); {
 	case err == nil:
+		// the old system's output says nothing about the new one: its console starts empty
+		if st := s.deps.Machine.Console(); st != nil && id != prev {
+			st.Reset()
+		}
 		c.retryPower(req)
 	case errors.Is(err, api.ErrBusy): // a power-on started meanwhile, or a simulator is still stopping
 		c.toast("warn", name+" cannot be selected while the simulator runs; try again once the machine is off.", req)
@@ -240,6 +245,7 @@ func (c *client) onInstall(id string, accept bool, req string) {
 		case errors.Is(err, api.ErrBusy):
 			c.toast("warn", name+" is already being installed.", req)
 		case errors.Is(err, context.Canceled): // a user's cancel: the "cancelled" progress says so
+		case errors.Is(err, api.ErrReported): // the "error" progress went to everyone
 		default:
 			c.toast("error", fmt.Sprintf("Installing %s failed: %v", name, err), req)
 		}
@@ -269,6 +275,7 @@ func (c *client) onFactoryReset(id, req string) {
 		case errors.Is(err, api.ErrBusy):
 			c.toast("warn", name+" is busy (being installed or reset, or in use by the simulator).", req)
 		case errors.Is(err, context.Canceled): // a user's cancel: the "cancelled" progress says so
+		case errors.Is(err, api.ErrReported): // the "error" progress went to everyone
 		default:
 			c.toast("error", fmt.Sprintf("Factory reset of %s failed: %v", name, err), req)
 		}

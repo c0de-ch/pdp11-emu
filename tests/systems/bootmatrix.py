@@ -78,6 +78,9 @@ INPUT_CPS = 100              # ... the rest is paced at InputCPS
 HALT_WAIT_AFTER_SCRIPT = 30.0   # PANEL_LOGIC.md "shutdownOS": wait for the CPU to halt
 SETTLE_AFTER_SCRIPT = 3.0       # ... or, if the script ends without a halt, 3 s more
 ANSWER_DELAY = 0.25             # ... and the pause between an expect match and the next send
+CONSOLE_QUIET = 0.3             # ... a console is judged once it was silent this long
+CONSOLE_QUIET_MAX = 2.0         # ... or after this long, if it keeps printing
+TAIL_KEEP = 1024                # ... by the end of its output
 CLOCK_SECS = 20.0               # --clock: wall time between the two "date" commands
 # --clock: the command that prints HH:MM:SS and the prompt after it (Unix: date, "# ")
 CLOCK_COMMANDS = {"rt11": ("TIME\r", "\r\n."), "rsx11mp": ("TIM\r", ">")}
@@ -120,10 +123,14 @@ class Step:
     expect: str = ""
     send: str = ""
     timeout: float = STEP_TIMEOUT
+    if_line_ends: tuple[str, ...] = ()  # shutdown scripts: docs/DESIGN.md section 7
+    expect_any: tuple[str, ...] = ()
+    otherwise: str = ""
 
     @classmethod
     def from_json(cls, d: dict) -> "Step":
-        return cls(d.get("expect", ""), d.get("send", ""), float(d.get("timeoutSec") or STEP_TIMEOUT))
+        return cls(d.get("expect", ""), d.get("send", ""), float(d.get("timeoutSec") or STEP_TIMEOUT),
+                   tuple(d.get("ifLineEnds") or ()), tuple(d.get("expectAny") or ()), d.get("else", ""))
 
 
 @dataclasses.dataclass
@@ -574,6 +581,41 @@ class ByteLog:
                                   % (self.name, needle, timeout, " (stream closed)" if self.closed else "", tail))
                 self.cv.wait(min(left, 0.25))
 
+    def find_any(self, needles: list[bytes], start: int, timeout: float,
+                 abort: Optional[Callable[[], Optional[str]]] = None) -> None:
+        """Wait until one of the needles occurs at or after start."""
+        deadline = time.monotonic() + timeout
+        with self.cv:
+            while True:
+                if any(self.buf.find(n, start) >= 0 for n in needles):
+                    return
+                if abort:
+                    why = abort()
+                    if why:
+                        raise HarnessError("%s while waiting for %r on %s" % (why, needles, self.name))
+                left = deadline - time.monotonic()
+                if left <= 0 or self.closed:
+                    tail = bytes(self.buf[max(start, len(self.buf) - 300):])
+                    raise Timeout("%s: none of %r seen within %.0f s%s; tail %r"
+                                  % (self.name, needles, timeout, " (stream closed)" if self.closed else "", tail))
+                self.cv.wait(min(left, 0.25))
+
+    def wait_quiet(self, quiet: float, longest: float) -> None:
+        """Wait until nothing arrived for quiet seconds (at most longest seconds)."""
+        deadline = time.monotonic() + longest
+        with self.cv:
+            size = len(self.buf)
+        calm = time.monotonic() + quiet
+        while True:
+            now = time.monotonic()
+            if now >= calm or now >= deadline:
+                return
+            time.sleep(min(calm - now, deadline - now))
+            with self.cv:
+                if len(self.buf) != size:
+                    size = len(self.buf)
+                    calm = time.monotonic() + quiet
+
     def wait_prompt(self, start: int, timeout: float) -> bytes:
         """Wait until the stream tail (after start) ends with the SCP prompt; return the reply."""
         deadline = time.monotonic() + timeout
@@ -898,6 +940,61 @@ def connect_tcp(port: int, total: float, every: float = 0.2) -> socket.socket:
             time.sleep(every)
 
 
+# Lines of 2.11BSD's syslog at the end of the output: the prompt before them still holds
+# (panel.consoleMessages).
+CONSOLE_MESSAGES = re.compile(rb"(?:[A-Z][a-z][a-z] [ 0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [^ \r\n]+ [^\r\n]*[\r\n]+)+\Z")
+
+
+def console_tail(raw: bytes) -> str:
+    """Console output as a reader of the screen takes it, like panel.consoleTail: it
+    starts with a line end, every run of line ends is one newline, a cursor move to an
+    absolute position or down a line counts as a line end, a backspace takes the
+    character before it back; fill, other control characters and terminal controls go."""
+    out = ["\n"]
+
+    def line_end() -> None:
+        if out[-1] != "\n":
+            out.append("\n")
+
+    i = 0
+    while i < len(raw):
+        c = raw[i]
+        if c in (0x0D, 0x0A):
+            line_end()
+        elif c == 0x08:
+            if out[-1] != "\n":
+                out.pop()
+        elif c == 0x1B and i + 1 < len(raw) and raw[i + 1] == 0x5B:
+            i += 2
+            while i < len(raw) and raw[i] < 0x40:
+                i += 1
+            if i < len(raw) and raw[i] in (0x48, 0x66):
+                line_end()
+        elif c == 0x1B and i + 1 < len(raw):
+            i += 1
+            if raw[i] in (0x44, 0x45, 0x4D):
+                line_end()
+        elif (c >= 0x20 and c != 0x7F) or c == 0x09:
+            out.append(chr(c))
+        i += 1
+    return "".join(out)
+
+
+def tail_ends_in(tail: str, text: str) -> bool:
+    """Whether a console_tail ends in text, where * stands for anything on the same line."""
+    pieces = text.split("*")
+    last = pieces[-1]
+    if not tail.endswith(last):
+        return False
+    rest = tail[:len(tail) - len(last)]
+    for piece in reversed(pieces[:-1]):
+        j = rest.rfind(piece)
+        if j < 0 or "\n" in rest[j + len(piece):]:
+            return False
+        rest = rest[:j]
+    return True
+
+
 class Line:
     """A guest serial line over TCP (the console, raw; or a telnet line)."""
 
@@ -966,9 +1063,25 @@ class Line:
         """Wait for needle in output produced since the previous expect/send boundary."""
         self.mark = self.out.find(needle.encode("latin-1"), self.mark, timeout, abort)
 
+    def expect_any(self, needles: tuple[str, ...], timeout: float, abort: Optional[Callable[[], Optional[str]]] = None) -> None:
+        """Like expect for the first of several texts; a later wait sees the same output."""
+        self.out.find_any([n.encode("latin-1") for n in needles], self.mark, timeout, abort)
+
+    def line_ends_in(self, texts: tuple[str, ...]) -> bool:
+        """Whether the output, once it stopped, ends in one of the texts."""
+        self.out.wait_quiet(CONSOLE_QUIET, CONSOLE_QUIET_MAX)
+        size = self.out.size()
+        tail = console_tail(CONSOLE_MESSAGES.sub(b"", self.out.text(max(0, size - TAIL_KEEP)).encode("latin-1")))
+        return any(tail_ends_in(tail, t) for t in texts)
+
     def boundary(self) -> None:
         """Later expects only see output produced from now on."""
         self.mark = self.out.size()
+
+    def line_start(self) -> None:
+        """Later expects also see the current line (a prompt already on the screen)."""
+        text = CONSOLE_MESSAGES.sub(b"", self.out.text(0).encode("latin-1")).decode("latin-1")
+        self.mark = max(text.rfind("\r"), text.rfind("\n"), 0)
 
     def close(self) -> None:
         self.writer.close()
@@ -1187,12 +1300,20 @@ class Runner:
 
     def _steps(self, steps: list[Step], sim: Simulator, line: Line, what: str, answer_delay: float = 0.0) -> None:
         """Types steps; answer_delay is the pause before the first send after an
-        expect matched (pdp11d's shutdown scripts: ANSWER_DELAY)."""
+        expect matched (pdp11d's shutdown scripts: ANSWER_DELAY). A step with
+        if_line_ends runs only if the console output ends in one of those texts."""
         answer = False
         for i, st in enumerate(steps):
-            if st.expect:
+            if st.if_line_ends and not line.line_ends_in(st.if_line_ends):
+                if st.otherwise:
+                    raise HarnessError("%s step %d: %s" % (what, i + 1, st.otherwise))
+                continue
+            if st.expect or st.expect_any:
                 try:
-                    line.expect(st.expect, st.timeout, abort=lambda: self._unexpected_stop(sim))
+                    if st.expect:
+                        line.expect(st.expect, st.timeout, abort=lambda: self._unexpected_stop(sim))
+                    else:
+                        line.expect_any(st.expect_any, st.timeout, abort=lambda: self._unexpected_stop(sim))
                 except HarnessError as e:
                     raise HarnessError("%s step %d: %s" % (what, i + 1, e)) from None
                 answer = True
@@ -1251,7 +1372,7 @@ class Runner:
     def _shutdown(self, system: System, sim: Simulator, console: Line, res: Result) -> None:
         res.phase = "shutdown"
         t0 = time.monotonic()
-        console.boundary()
+        console.line_start()
         steps = system.shutdown
         if steps:
             self._steps(steps, sim, console, "shutdownScript", answer_delay=ANSWER_DELAY)

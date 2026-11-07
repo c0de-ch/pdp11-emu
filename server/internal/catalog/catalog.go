@@ -107,9 +107,21 @@ type Tests struct {
 }
 
 // Step waits for Expect (if set) on the console, then types Send (if set).
+// IfLineEnds, ExpectAny and Else exist only in shutdown scripts
+// (docs/DESIGN.md §7).
 type Step struct {
-	Expect     string `json:"expect,omitempty"`
-	Send       string `json:"send,omitempty"`
+	// IfLineEnds: the step runs only if the console output ends in one of
+	// these texts; otherwise it is skipped, or with Else the script fails.
+	// "\n" stands for any line end and "*" for anything on the same line.
+	IfLineEnds []string `json:"ifLineEnds,omitempty"`
+	Expect     string   `json:"expect,omitempty"`
+	// ExpectAny waits like Expect for the first of several texts, and leaves
+	// what it saw for the next step's wait.
+	ExpectAny []string `json:"expectAny,omitempty"`
+	Send      string   `json:"send,omitempty"`
+	// Else ends the script at once, as a failure with this text, when
+	// IfLineEnds does not hold or the wait for Expect or ExpectAny times out.
+	Else       string `json:"else,omitempty"`
 	TimeoutSec int    `json:"timeoutSec,omitempty"` // default 30
 }
 
@@ -307,6 +319,74 @@ func checkDialogLine(line string) string {
 	return "dialog.ini may only contain expect and send commands"
 }
 
+// checkShutdownScript validates a shutdown script (docs/DESIGN.md §7). The
+// script is typed on a console that may be in any state, so it has to look
+// before it types: its first step checks the console and fails otherwise.
+func checkShutdownScript(steps []Step) []string {
+	var msgs []string
+	bad := func(i int, f string, a ...any) {
+		msgs = append(msgs, fmt.Sprintf("shutdownScript step %d: ", i)+fmt.Sprintf(f, a...))
+	}
+	for i, st := range steps {
+		wait := st.Expect != "" || len(st.ExpectAny) > 0
+		if !wait && st.Send == "" && st.Else == "" {
+			msgs = append(msgs, fmt.Sprintf("shutdownScript step %d is empty", i))
+		}
+		if st.Expect != "" && len(st.ExpectAny) > 0 {
+			bad(i, "expect and expectAny exclude each other")
+		}
+		if len(st.ExpectAny) == 1 {
+			bad(i, "expectAny needs at least two texts (one is an expect)")
+		}
+		for _, t := range st.ExpectAny {
+			if t == "" {
+				bad(i, "expectAny holds an empty text")
+			}
+		}
+		if st.Else != "" && len(st.IfLineEnds) == 0 && !wait {
+			bad(i, "else needs ifLineEnds, expect or expectAny")
+		}
+		for _, t := range st.IfLineEnds {
+			if msg := checkLineEnd(t); msg != "" {
+				bad(i, "ifLineEnds %q: %s", t, msg)
+			}
+		}
+		if st.TimeoutSec < 0 {
+			bad(i, "timeoutSec %d is negative", st.TimeoutSec)
+		}
+		if strings.ContainsAny(st.Send, "\x03\x1c\x7f") {
+			bad(i, "send holds an interrupt (Ctrl+C, Ctrl+\\ or DEL): it could disturb a running program")
+		}
+		if len(st.IfLineEnds) == 0 && strings.IndexFunc(st.Send, func(r rune) bool { return r < 0x20 && r != '\r' && r != '\n' }) >= 0 {
+			bad(i, "send holds a control character: it needs ifLineEnds, to know what it reaches")
+		}
+	}
+	if len(steps) > 0 {
+		if first := steps[0]; len(first.IfLineEnds) == 0 || first.Else == "" {
+			bad(0, "the first step must check the console (ifLineEnds) and say what to do otherwise (else)")
+		}
+		last := len(steps) - 1
+		if st := steps[last]; len(st.IfLineEnds) > 0 || (st.Send == "" && st.Expect == "" && len(st.ExpectAny) == 0) {
+			bad(last, "the last step tells how the shutdown ends: it must have send or expect, and no ifLineEnds")
+		}
+	}
+	return msgs
+}
+
+// checkLineEnd validates one ifLineEnds text; it returns "" if allowed. The
+// console output is compared after line ends became "\n" and the fill, erased
+// characters and terminal controls went (panel.consoleTail), so a text that
+// holds any of those could never match.
+func checkLineEnd(t string) string {
+	if strings.IndexFunc(t, func(r rune) bool { return r != '\n' && (r < 0x20 || r == 0x7f) }) >= 0 {
+		return "control characters never match: a line end is written \\n"
+	}
+	if strings.Trim(t, "\n*") == "" {
+		return "needs some text beyond line ends and *"
+	}
+	return ""
+}
+
 // Validate checks the catalog; it returns every problem found.
 func (c *Catalog) Validate() []error {
 	var errs []error
@@ -439,15 +519,16 @@ func (c *Catalog) Validate() []error {
 				add(s, "dialog.ini line %d %q: %s", n+1, strings.TrimSpace(line), msg)
 			}
 		}
-		for i, st := range s.ShutdownScript {
-			if st.Expect == "" && st.Send == "" {
-				add(s, "shutdownScript step %d is empty", i)
-			}
+		for _, msg := range checkShutdownScript(s.ShutdownScript) {
+			add(s, "%s", msg)
 		}
 		if s.Tests != nil {
 			for i, st := range s.Tests.Session {
 				if st.Expect == "" && st.Send == "" {
 					add(s, "tests.session step %d is empty", i)
+				}
+				if len(st.IfLineEnds) > 0 || len(st.ExpectAny) > 0 || st.Else != "" {
+					add(s, "tests.session step %d: ifLineEnds, expectAny and else belong in a shutdownScript", i)
 				}
 			}
 		}

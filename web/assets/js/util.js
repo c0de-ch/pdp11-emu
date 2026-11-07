@@ -88,6 +88,33 @@ export function copyText(text) {
   return ok;
 }
 
+// How the user last moved around the page: a pointer, or keys that move the focus.
+let lastNav = 'pointer';
+addEventListener('pointerdown', () => { lastNav = 'pointer'; }, true);
+addEventListener('keydown', (e) => {
+  if (e.key === 'Tab' || e.key?.startsWith('Arrow')) lastNav = 'key';
+}, true);
+
+/**
+ * Gives the focus back to the element a dialog or menu was opened from. It
+ * shows its focus ring for someone who navigates with the keyboard; after a
+ * click it stays quiet until a key is pressed there: a ring would mark a
+ * button nobody is looking for.
+ */
+export function restoreFocus(el) {
+  if (!el?.focus || !document.contains(el)) return;
+  el.focus({ preventScroll: true });
+  if (lastNav !== 'pointer') return;
+  el.classList.add('focus-quiet');
+  const off = () => {
+    el.classList.remove('focus-quiet');
+    el.removeEventListener('blur', off);
+    el.removeEventListener('keydown', off);
+  };
+  el.addEventListener('blur', off);
+  el.addEventListener('keydown', off);
+}
+
 /** Correlation ids for requests ("req"), unique per page. */
 let reqSeq = 0;
 export function newReq(prefix = 'r') {

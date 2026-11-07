@@ -36,6 +36,11 @@ message, possibly only the type byte, never merged with live output. It is the
 end-of-history marker; every later `0x10` message is live output (consecutive
 live output may be merged, ≤ 64 KiB per message: pdp11d's writer leaves 4 ms
 between writes to a client, and what arrives meanwhile becomes one message).
+A `selectSystem` that changes the selection empties the history and sends every
+console subscriber `ESC c` (full terminal reset) as live output, so all viewers,
+later ones too, continue with an empty console: the new system's output starts
+at the top, without the old system's text around it. Reboots and power cycles
+of the same system keep the history.
 
 **Reconnect**: on close the client reconnects with backoff 0.5 s → 5 s (×2, reset
 by a `hello`) and re-sends its subscription via the query string. It reloads
@@ -104,6 +109,8 @@ DATA_PATHS · `61` BUS_REG · `62` UADRS · `63` DISPLAY_REG.
 // SystemInfo (api.SystemInfo):
 { "id": "bsd211", "name": "…", "short": "2.11BSD", "category": "unix" | "dec", "description": "…",
   "order": 10, "default": true, "installed": true, "installing": false,
+  "task": "install" | "factoryReset",  // what "installing" is about; omitted when no task runs
+  "failure": TaskFailure,              // why the last install or reset failed; omitted once the next one starts
   "downloadBytes": 24201968, "diskBytes": 1000448512,
   "license": { "name": "…", "class": "redistributable" | "hobbyist", "summary": "…", "text": "…" },
   "credentials": [ { "user": "root", "password": "", "note": "…" } ],   // [] when none
@@ -115,7 +122,14 @@ DATA_PATHS · `61` BUS_REG · `62` UADRS · `63` DISPLAY_REG.
 
 { "type": "progress", "task": "install" | "factoryReset" | "shutdown", "id": "rt11",
   "phase": "download" | "verify" | "extract" | "step" | "done" | "error" | "cancelled",
-  "pct": 42.5, "bytes": 123, "total": 456, "text": "…", "req": "…" }
+  "pct": 42.5, "bytes": 123, "total": 456, "text": "…", "req": "…",
+  "failure": TaskFailure }             // phase "error" of an install or factory reset
+
+// TaskFailure (api.TaskFailure): in the terms of the person who asked for the task
+{ "task": "install" | "factoryReset",
+  "summary": "The download server could not be reached (connection refused).",  // what happened
+  "hint": "Check that this machine can reach the internet and try again. Or download `x.tar.gz` (24.2 MB) yourself from [https://…](https://…), put it in `/data/import` and try again: pdp11d looks there first.",  // what to do: inline markdown (code, links)
+  "detail": "cannot download x.tar.gz (24201968 bytes, sha256 …); tried https://… (attempt 1: …) …" }  // the error itself, also in "text"
 
 { "type": "toast", "level": "info" | "warn" | "error", "text": "…", "req": "…" }
 
@@ -134,9 +148,13 @@ DATA_PATHS · `61` BUS_REG · `62` UADRS · `63` DISPLAY_REG.
   `stats` changes alone ≤ 1/s; `inputQueued` is re-read 4 times a second).
 * `systems` is sent on connect and whenever any entry changes (install state,
   speed override, selection), coalesced.
-* `progress` goes to everyone: phase changes and final phases at once and in
-  order, updates within a phase ≤ 10/s per task (newest wins). `req` (omitted
-  when empty) is that of the request that started the task.
+* `progress` goes to everyone: phase changes, new texts and final phases at once
+  and in order, updates within a phase ≤ 10/s per task (newest wins). `req`
+  (omitted when empty) is that of the request that started the task. In phase
+  `download` a message with `bytes` 0 says what the task waits for instead of
+  bytes: "Waiting for another installation to finish", "Connecting to
+  raw.githubusercontent.com…", "Attempt 1 of 3 failed (connection refused);
+  trying again in 2 s…".
 * Live `log` lines are batched (≤ 1000 per message).
 * Toasts (`req` omitted when empty):
 
@@ -145,10 +163,11 @@ DATA_PATHS · `61` BUS_REG · `62` UADRS · `63` DISPLAY_REG.
 | invalid message (unknown type, wrong field type or value, unknown system id) | `error` | sender, its `req` |
 | ignored input — at once, or when it ran after waiting in the panel queue (`PANEL_LOGIC.md` §1) | `warn` | sender, the `req` of that input |
 | `selectSystem`/`factoryReset` refused; install or reset already running | `warn` | sender, its `req` |
-| install, factory reset or speed change failed (a cancel is no failure: the `cancelled` progress reports it, without a toast) | `error` | sender, its `req` |
+| install or factory reset refused before its task started, speed change failed (a failed task is reported to everyone by its `error` progress, a cancel by its `cancelled` progress, both without a toast) | `error` | sender, its `req` |
 | console input dropped (machine off, queue full); unsupported channels | `warn` | sender |
 | machine errors (`EvError`: simulator failed, boot failed, …) | `error` | everyone |
 | shutdown failed (`warn`) or cancelled by a HALT (`info`) | `warn`/`info` | everyone, the `shutdownOS` request's `req` |
+| a repair restored a missing disk next to other disks that stay as they are (`DESIGN.md` §6) | `warn` | everyone, the install's `req` if it has one |
 | boot has not reached its prompt within `bootTimeoutSec` | `warn` | everyone (once per boot), the booting input's `req` |
 
 ### 1.3 JSON client → server
@@ -169,7 +188,7 @@ vice versa); anything invalid gets an `error` toast and is not executed.
 { "type": "shutdownOS" }                                            // clean OS shutdown, then power off
 { "type": "selectSystem", "id": "rt11" }                            // only while run ∈ {off, error}, key != lock, panel not busy
 { "type": "install", "id": "rt11", "acceptLicense": true }          // acceptLicense required for class hobbyist
-{ "type": "factoryReset", "id": "rt11" }                            // the selected system: same guard as selectSystem
+{ "type": "factoryReset", "id": "rt11" }                            // the selected system only under the same guard as selectSystem
 { "type": "cancel", "task": "install" | "factoryReset", "id": "rt11" }
 { "type": "speed", "value": "fast" | "authentic" }                  // selected system; persisted (DESIGN §9)
 { "type": "inputCancel" }                                           // drop queued console input

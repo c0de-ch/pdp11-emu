@@ -1,7 +1,8 @@
 // Toggle-in tutorial (UI.md §6): a light chaser on the DISPLAY REGISTER.
-// A floating, non-modal card next to the panel that follows the user's
-// progress and can perform every step itself ("Auto-toggle") with the real
-// panel messages, so the paddles visibly move.
+// A non-modal card that follows the user's progress and can perform every step
+// itself ("Auto-toggle") with the real panel messages, so the paddles visibly
+// move. It sits in the dock under the panel, where it hides nothing; where the
+// dock has no room it floats over the console and can be dragged away.
 
 import { h, octal } from '../util.js';
 import { osInMemory } from './dialog.js';
@@ -15,6 +16,7 @@ export const PROGRAM_START = 0o1000;
 // Verified on the patched SimH: DR = 1, 2, 4 ... 100000, 0, 1, 2 ...
 export const PROGRAM = [0o012700, 0o000001, 0o010037, 0o177570, 0o000240, 0o077101, 0o006100, 0o000772];
 const STEP_MS = 380;
+const MIN_DOCK_H = 150; // px, a lower dock is too small for the card
 
 export class Tutorial {
   constructor(app) {
@@ -24,6 +26,7 @@ export class Tutorial {
     this.deposited = 0;
     this.running = false;
     this.abort = false;
+    this.moved = false; // dragged: stays where the user put it
   }
 
   open() {
@@ -33,17 +36,19 @@ export class Tutorial {
     }
     this.step = 0;
     this.deposited = 0;
+    this.moved = false;
     this.list = h('ol', {});
     this.live = h('div', { class: 'live', 'aria-live': 'off' });
     this.autoBtn = h('button', { type: 'button', class: 'btn btn-primary', onclick: () => (this.running ? this.stop() : this.auto()) }, 'Auto-toggle');
-    const head = h('header', {}, h('h2', {}, 'Toggle-in tutorial'),
+    const head = h('header', { title: 'Drag to move' }, h('h2', {}, 'Toggle-in tutorial'),
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close tutorial', onclick: () => this.close() }, '×'));
     this.el = h('section', { class: 'tutorial', role: 'dialog', 'aria-label': 'Toggle-in tutorial' },
-      head, this.list, this.live,
-      h('footer', {},
-        h('button', { type: 'button', class: 'btn', onclick: () => this.advance(-1) }, 'Back'),
-        h('button', { type: 'button', class: 'btn', onclick: () => this.advance(1) }, 'Next'),
-        this.autoBtn));
+      head, this.list,
+      h('footer', {}, this.live,
+        h('span', { class: 'buttons' },
+          h('button', { type: 'button', class: 'btn', onclick: () => this.advance(-1) }, 'Back'),
+          h('button', { type: 'button', class: 'btn', onclick: () => this.advance(1) }, 'Next'),
+          this.autoBtn)));
     this.dragging(head);
     // a non-modal card at the end of the page, behind the console (Tab goes to the
     // PDP-11 there): the keyboard goes to it when it opens, Esc gives the focus back
@@ -55,8 +60,39 @@ export class Tutorial {
     this.prevFocus = document.activeElement;
     document.body.append(this.el);
     this.render();
+    this.place();
+    this.app.placeToasts?.();
     this.autoBtn.focus({ preventScroll: true });
     this.unsub = this.app.onSent((m) => this.observe(m));
+  }
+
+  /** Docks the card under the panel, or floats it over the console (on open and after a layout pass). */
+  place() {
+    const el = this.el;
+    if (!el || this.moved) return;
+    const s = el.style;
+    const rect = this.app.tutorialDock?.();
+    this.docked = !!rect && rect.height >= MIN_DOCK_H;
+    el.classList.toggle('docked', this.docked);
+    if (this.docked) {
+      s.left = `${rect.left}px`;
+      s.top = `${rect.top}px`;
+      s.width = `${rect.width}px`;
+      s.height = `${rect.height}px`;
+      s.right = s.bottom = 'auto';
+      s.maxHeight = '';
+      return;
+    }
+    s.height = s.width = '';
+    const over = this.app.tutorialFloat?.();
+    s.top = over ? `${over.top}px` : '';
+    s.right = over ? `${over.right}px` : '';
+    s.maxHeight = over ? `${over.height}px` : '';
+    s.left = s.bottom = '';
+  }
+
+  isDocked() {
+    return !!this.el && !!this.docked && !this.moved;
   }
 
   close() {
@@ -65,6 +101,8 @@ export class Tutorial {
     const inside = this.el?.contains(document.activeElement);
     this.el?.remove();
     this.el = null;
+    this.docked = false;
+    this.app.placeToasts?.();
     if (inside) {
       const back = this.prevFocus;
       if (back && back !== document.body && document.contains(back)) back.focus({ preventScroll: true });
@@ -80,9 +118,16 @@ export class Tutorial {
       const dy = e.clientY - r.top;
       handle.setPointerCapture(e.pointerId);
       const move = (ev) => {
-        this.el.style.left = `${Math.max(0, Math.min(innerWidth - r.width, ev.clientX - dx))}px`;
-        this.el.style.top = `${Math.max(0, Math.min(innerHeight - 40, ev.clientY - dy))}px`;
+        this.moved = true;
+        this.docked = false;
+        this.el.classList.remove('docked');
+        const top = Math.max(0, Math.min(innerHeight - 40, ev.clientY - dy));
+        this.el.style.height = this.el.style.width = '';
+        this.el.style.left = `${Math.max(0, Math.min(innerWidth - this.el.offsetWidth, ev.clientX - dx))}px`;
+        this.el.style.top = `${top}px`;
         this.el.style.right = 'auto';
+        this.el.style.bottom = 'auto';
+        this.el.style.maxHeight = `${Math.max(160, innerHeight - top - 8)}px`;
       };
       const up = () => {
         handle.removeEventListener('pointermove', move);
@@ -110,6 +155,14 @@ export class Tutorial {
     this.steps().forEach((content, i) => {
       this.list.append(h('li', { class: i < this.step ? 'done' : i === this.step ? 'current' : '', 'aria-current': i === this.step ? 'step' : null }, ...content));
     });
+    // a list too long for its place scrolls to the current step
+    const cur = this.list.querySelector('.current');
+    if (cur) {
+      const l = this.list.getBoundingClientRect();
+      const c = cur.getBoundingClientRect();
+      if (c.top < l.top) this.list.scrollTop += c.top - l.top;
+      else if (c.bottom > l.bottom) this.list.scrollTop += c.bottom - l.bottom;
+    }
     this.updateLive();
   }
 

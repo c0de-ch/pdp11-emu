@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +100,8 @@ var (
 	haltAfterScript    = 30 * time.Second // the last step typed a command: wait for the OS to halt
 	settleAfterScript  = 3 * time.Second  // the script ended without a command (Unix V5-V7 sync)
 	readyBeforeScript  = 25 * time.Second // a boot in progress: wait for its prompt first
+	consoleQuiet       = 300 * time.Millisecond
+	consoleQuietMax    = 2 * time.Second
 )
 
 // answerDelay is the pause between an Expect match and the next Send: an
@@ -154,9 +157,11 @@ const (
 )
 
 // shutdown types the system's shutdown script on the console: for each
-// step it waits (≤ timeout) for Expect in the console output since the
-// previous step, then types Send (answerDelay after a match). Expect is a
-// literal, case-sensitive substring; the first step's also matches the
+// step it first judges the console if the step has IfLineEnds (skipping
+// the step or, with Else, failing at once), then waits (≤ timeout) for Expect
+// or the first of ExpectAny in the console output since the previous step,
+// then types Send (answerDelay after a match). The wait texts are literal,
+// case-sensitive substrings; before anything is typed they also match the
 // text after the last newline of the history (a prompt already on
 // screen). Then it waits for the CPU to halt (30 s) or, if the script ends
 // without typing anything, 3 s more. Any stop that was not requested from
@@ -191,7 +196,7 @@ func (p *Panel) shutdown(o *op, powerOff bool) error {
 	defer w.close()
 	since := p.stopCount()
 	total := float64(len(steps) + 1)
-	pos := 0
+	pos := w.start
 	res := waitMatched
 	answer := false // an Expect matched and nothing was typed since
 	// A boot the panel started is still in progress: the guest discards what
@@ -211,27 +216,55 @@ func (p *Panel) shutdown(o *op, powerOff bool) error {
 			break
 		}
 		pct := 100 * float64(i) / total
-		if s.Expect != "" {
-			p.log.Debug("shutdown step", "system", id, "expect", s.Expect)
-			progress("step", pct, "Waiting for “"+scriptText(s.Expect)+"”")
+		if len(s.IfLineEnds) > 0 {
+			if i == 0 {
+				progress("step", pct, "Checking the console…")
+			}
+			if res = p.waitQuiet(o.ctx, since, w, stream); res != waitMatched {
+				break
+			}
+			if !w.lineEnds(s.IfLineEnds) {
+				p.log.Debug("shutdown step skipped", "system", id, "ifLineEnds", s.IfLineEnds, "console", w.lastLine())
+				if s.Else != "" {
+					p.log.Warn("shutdown script: the console is not in a state it can go on from", "system", id, "console", w.lastLine())
+					return fail("Shut down OS: " + s.Else)
+				}
+				continue
+			}
+		}
+		if texts := s.ExpectAny; s.Expect != "" || len(texts) > 0 {
+			if s.Expect != "" {
+				texts = []string{s.Expect}
+			}
+			p.log.Debug("shutdown step", "system", id, "expect", texts)
+			progress("step", pct, waitingText(texts))
 			timeout := defaultStepTimeout
 			if s.TimeoutSec > 0 {
 				timeout = time.Duration(s.TimeoutSec) * time.Second
 			}
 			var end int
 			res = p.waitShutdown(o.ctx, timeout, since, w, func() bool {
-				var ok bool
-				end, ok = w.find(pos, s.Expect)
-				return ok
+				for _, t := range texts {
+					var ok bool
+					if end, ok = w.find(pos, t); ok {
+						return true
+					}
+				}
+				return false
 			})
 			if res != waitMatched {
 				if res == waitTimeout {
-					p.log.Warn("shutdown script: a prompt did not appear", "system", id, "expect", scriptText(s.Expect), "console", w.lastLine())
-					return fail(fmt.Sprintf("Shut down OS: “%s” did not appear on the console within %s.", scriptText(s.Expect), timeout))
+					p.log.Warn("shutdown script: a prompt did not appear", "system", id, "expect", joinTexts(texts, "", " or "), "console", w.lastLine())
+					if s.Else != "" {
+						return fail("Shut down OS: " + s.Else)
+					}
+					return fail(fmt.Sprintf("Shut down OS: “%s” did not appear on the console within %s.", joinTexts(texts, "”", " or “"), timeout))
 				}
 				break
 			}
-			pos = end
+			if s.Expect != "" {
+				pos = end
+			}
 			answer = true
 		}
 		if s.Send != "" {
@@ -244,7 +277,7 @@ func (p *Panel) shutdown(o *op, powerOff bool) error {
 			}
 			p.log.Debug("shutdown step", "system", id, "send", s.Send)
 			progress("step", pct, typingText(s.Send))
-			pos = w.end()
+			pos = w.typed()
 			if _, err := stream.Write([]byte(s.Send)); err != nil {
 				return fail("Shut down OS: cannot type on the console: " + err.Error())
 			}
@@ -316,6 +349,23 @@ func scriptText(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
+// waitingText is the progress text of a wait.
+func waitingText(texts []string) string {
+	if len(texts) == 1 {
+		return "Waiting for “" + scriptText(texts[0]) + "”"
+	}
+	return "Waiting for the console…"
+}
+
+// joinTexts shows the texts of a wait, each in the form of scriptText.
+func joinTexts(texts []string, closing, sep string) string {
+	shown := make([]string, len(texts))
+	for i, t := range texts {
+		shown[i] = scriptText(t)
+	}
+	return strings.Join(shown, closing+sep)
+}
+
 // typingText is the progress text of a send step; a send of a bare line
 // end (RSX and RSTS answers) is shown as pressing Return.
 func typingText(send string) string {
@@ -366,29 +416,63 @@ func (p *Panel) waitShutdown(ctx context.Context, timeout time.Duration, since u
 	}
 }
 
-// consoleWatch collects console output for the shutdown script. Positions
-// are offsets into the watched text: the current line of the history (so
-// a prompt that is already on screen matches the first step) followed by
-// all output since the watch started.
-type consoleWatch struct {
-	mu     sync.Mutex
-	buf    []byte
-	base   int // offset of buf[0] (older text was discarded)
-	signal chan struct{}
-	cancel func()
+// waitQuiet waits until the console has been silent for consoleQuiet with no
+// typed input left to send, because a judgement of it holds only then: a prompt
+// may be on its way (at most consoleQuietMax: a console that never stops is
+// judged as it is). waitMatched: it was judged; otherwise why the wait ended.
+func (p *Panel) waitQuiet(ctx context.Context, since uint64, w *consoleWatch, s api.Stream) waitResult {
+	deadline := time.Now().Add(consoleQuietMax)
+	for {
+		left := consoleQuiet - w.silence()
+		if left <= 0 && s.Queued() > 0 {
+			left = consoleQuiet / 4
+		}
+		rest := time.Until(deadline)
+		if left <= 0 || rest <= 0 {
+			return waitMatched
+		}
+		if r := p.waitShutdown(ctx, min(left, rest), since, nil, nil); r != waitTimeout {
+			return r
+		}
+	}
 }
 
-const watchKeep = 64 << 10
+// consoleWatch collects console output for the shutdown script. Positions
+// are offsets into the watched text: the end of the history, of which only
+// the current line counts for Expect (so a prompt that is already on screen
+// matches, and older text does not), followed by all output since the watch
+// started.
+type consoleWatch struct {
+	mu      sync.Mutex
+	buf     []byte
+	base    int       // offset of buf[0] (older text was discarded)
+	start   int       // position of the history's last line end: where the first wait starts
+	lastAdd time.Time // output or typing, whichever came last
+	signal  chan struct{}
+	cancel  func()
+}
+
+const (
+	watchKeep = 64 << 10
+	tailKeep  = 1 << 10 // what lineEnds looks at
+)
+
+// consoleMessages matches lines of 2.11BSD's syslog at the end of the output
+// ("Mar 30 02:31:38 pdp11 login: ROOT LOGIN ON tty00"). They are printed where
+// the cursor is, usually after a prompt, which still holds: what is typed next
+// goes where it would have gone.
+var consoleMessages = regexp.MustCompile(`(?:[A-Z][a-z][a-z] [ 0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [^ \r\n]+ [^\r\n]*[\r\n]+)+$`)
 
 func watchConsole(s api.Stream) *consoleWatch {
-	w := &consoleWatch{signal: make(chan struct{}, 1)}
+	w := &consoleWatch{signal: make(chan struct{}, 1), lastAdd: time.Now()}
 	hist, cancel := s.SubscribeHistory(w.add)
-	if i := bytes.LastIndexAny(hist, "\r\n"); i >= 0 {
-		hist = hist[i+1:]
+	if len(hist) > tailKeep {
+		hist = hist[len(hist)-tailKeep:]
 	}
 	w.mu.Lock()
 	// Output delivered while SubscribeHistory ran follows the history.
 	w.buf = append(append([]byte(nil), hist...), w.buf...)
+	w.start = max(bytes.LastIndexAny(consoleMessages.ReplaceAll(hist, nil), "\r\n"), 0)
 	w.cancel = cancel
 	w.mu.Unlock()
 	signal(w.signal)
@@ -398,12 +482,99 @@ func watchConsole(s api.Stream) *consoleWatch {
 func (w *consoleWatch) add(p []byte) {
 	w.mu.Lock()
 	w.buf = append(w.buf, p...)
+	w.lastAdd = time.Now()
 	if over := len(w.buf) - watchKeep; over > 0 {
 		w.buf = append(w.buf[:0], w.buf[over:]...)
 		w.base += over
 	}
 	w.mu.Unlock()
 	signal(w.signal)
+}
+
+// silence returns the time since the last output or typing.
+func (w *consoleWatch) silence() time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return time.Since(w.lastAdd)
+}
+
+// lineEnds reports whether the console output ends in one of the texts
+// (DESIGN.md §7).
+func (w *consoleWatch) lineEnds(texts []string) bool {
+	w.mu.Lock()
+	b := w.buf
+	if len(b) > tailKeep {
+		b = b[len(b)-tailKeep:]
+	}
+	tail := consoleTail(consoleMessages.ReplaceAll(b, nil))
+	w.mu.Unlock()
+	for _, t := range texts {
+		if tailEndsIn(tail, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// consoleTail reduces console output to what a reader of the screen takes from
+// it: it starts with a line end, every run of line ends is one "\n" (so blank
+// lines do not count), a cursor move to an absolute position (vi, jove) or down
+// a line counts as a line end, a backspace takes the character before it back,
+// and fill and other control characters and terminal controls are gone.
+func consoleTail(raw []byte) string {
+	out := make([]byte, 1, len(raw)+1)
+	out[0] = '\n'
+	lineEnd := func() {
+		if out[len(out)-1] != '\n' {
+			out = append(out, '\n')
+		}
+	}
+	for i := 0; i < len(raw); i++ {
+		switch c := raw[i]; {
+		case c == '\r' || c == '\n':
+			lineEnd()
+		case c == '\b':
+			if out[len(out)-1] != '\n' {
+				out = out[:len(out)-1]
+			}
+		case c == 0x1b && i+1 < len(raw) && raw[i+1] == '[':
+			i += 2
+			for i < len(raw) && raw[i] < 0x40 {
+				i++ // parameters
+			}
+			if i < len(raw) && (raw[i] == 'H' || raw[i] == 'f') {
+				lineEnd()
+			}
+		case c == 0x1b && i+1 < len(raw):
+			i++
+			if raw[i] == 'D' || raw[i] == 'E' || raw[i] == 'M' {
+				lineEnd()
+			}
+		case c >= 0x20 && c != 0x7f || c == '\t':
+			out = append(out, c)
+		}
+	}
+	return string(out)
+}
+
+// tailEndsIn reports whether a consoleTail ends in text, where "*" stands for
+// anything on the same line. Matching runs from the end: the last piece must
+// be the very end of the tail, each piece before it the nearest occurrence.
+func tailEndsIn(tail, text string) bool {
+	pieces := strings.Split(text, "*")
+	last := pieces[len(pieces)-1]
+	if !strings.HasSuffix(tail, last) {
+		return false
+	}
+	rest := tail[:len(tail)-len(last)]
+	for i := len(pieces) - 2; i >= 0; i-- {
+		j := strings.LastIndex(rest, pieces[i])
+		if j < 0 || strings.Contains(rest[j+len(pieces[i]):], "\n") {
+			return false
+		}
+		rest = rest[:j]
+	}
+	return true
 }
 
 // find looks for s in the text after position from and returns the
@@ -440,10 +611,12 @@ func (w *consoleWatch) lastLine() string {
 	return scriptText(string(b))
 }
 
-// end returns the position after the text seen so far.
-func (w *consoleWatch) end() int {
+// typed notes that the script types now: it returns the position after the
+// text seen so far, and the console counts as active from here on.
+func (w *consoleWatch) typed() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.lastAdd = time.Now()
 	return w.base + len(w.buf)
 }
 

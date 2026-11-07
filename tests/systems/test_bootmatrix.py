@@ -141,6 +141,125 @@ class ScpTest(unittest.TestCase):
         self.assertGreaterEqual(t[4] - t[3], 0.2)   # expect-only step, then the next send
         self.assertEqual(bm.ANSWER_DELAY, 0.25)
 
+    def test_console_tail(self):
+        """The same cases as TestConsoleTail in server/internal/panel/power_test.go."""
+        cases = [
+            (b"", "\n"),
+            (b"2.11 BSD UNIX\r\n\r\r\n\rlogin: ", "\n2.11 BSD UNIX\nlogin: "),
+            (b"\x15\r       \rlogin: ", "\n       \nlogin: "),
+            (b"@unix\r\n\n\r\x1b;\x07login: ", "\n@unix\nlogin: "),
+            (b"abc\b \b", "\nab"),
+            (b"# ab\b \b\b \b", "\n# "),
+            (b"cat\r\n^D\b\b# ", "\ncat\n# "),
+            (b"TIM\r\n>\x00", "\nTIM\n>"),
+            (b"Ready\r\n\n", "\nReady\n"),
+            (b":q!\r\x1bD\x1b[?1l\x1b># ", "\n:q!\n# "),
+            (b"JOVE\x1b[m\x1b[H\x1b[?1l\x1b>\x1b[24;1H\x1b[K# ", "\nJOVE\n# "),
+            (b"[New file]\x1b[H", "\n[New file]\n"),
+        ]
+        for raw, want in cases:
+            self.assertEqual(bm.console_tail(raw), want, raw)
+
+    def test_tail_ends_in(self):
+        """The same cases as TestConsoleTail in server/internal/panel/power_test.go."""
+        cases = [
+            ("\nlogin: ", "login: ", True), ("\nlogin: ", "\nlogin: ", True), ("\nLast login: ", "\nlogin: ", False),
+            ("\nlogin: fo", "login: ", False), ("\nlogin: fo", "\nlogin: *", True), ("\nlogin: ", "\nlogin: *", True),
+            ("\nlogin: fo\n", "\nlogin: *", False), ("\nlogin: a\nb", "\nlogin: *", False),
+            ("\n# ", "\n# ", True), ("\nhello # ", "\n# ", False), ("\nhello # ", "# ", True),
+            ("\nuser[12] ", "\nuser[*] ", True), ("\nuser[12] x", "\nuser[*] ", False), ("\nremove? [y/n] ", "\nuser[*] ", False),
+            ("\nReady\n", "Ready\n", True), ("\nReady\nPRI", "Ready\n", False), ("\nGood evening\n", "Good *\n", True),
+            ("\nGood\nmorning\n", "Good *\n", False), ("\n>", "\n>", True), ("\nPIP>", "\n>", False), ("\n>HELLO U", "\n>HEL*", True),
+        ]
+        for tail, text, want in cases:
+            self.assertEqual(bm.tail_ends_in(tail, text), want, (tail, text))
+
+    def test_conditional_steps(self):
+        """A step with if_line_ends runs only if the output ends in one of its texts, and
+        otherwise is skipped or, with otherwise, ends the script; expect_any leaves what
+        it saw for the next wait."""
+        class FakeLine:
+            def __init__(self, tail):
+                self.tail = tail
+                self.events = []
+
+            def line_ends_in(self, texts):
+                return any(bm.tail_ends_in(self.tail, t) for t in texts)
+
+            def expect(self, text, timeout, abort=None):
+                self.events.append("expect " + text)
+
+            def expect_any(self, texts, timeout, abort=None):
+                self.events.append("any " + texts[0])
+
+            def boundary(self):
+                pass
+
+            def send(self, text):
+                self.events.append("send " + text)
+                self.tail = "\n# "
+
+        class FakeRunner:
+            def _unexpected_stop(self, sim):
+                return None
+
+        steps = [bm.Step.from_json(s) for s in [
+            {"ifLineEnds": ["\nlogin: *", "\n# "], "else": "not at a prompt"},
+            {"ifLineEnds": ["\nlogin: *"], "send": "root\r"},
+            {"expectAny": ["# ", "Password:"], "timeoutSec": 5},
+            {"ifLineEnds": ["# "], "else": "a password"},
+            {"expect": "# ", "send": "sync\r"},
+        ]]
+        self.assertEqual(steps[0].if_line_ends, ("\nlogin: *", "\n# "))
+        self.assertEqual(steps[0].otherwise, "not at a prompt")
+        self.assertEqual(steps[2].expect_any, ("# ", "Password:"))
+        self.assertEqual(steps[2].timeout, 5.0)
+        run = lambda line: bm.Runner._steps(FakeRunner(), steps, None, line, "shutdownScript")
+        line = FakeLine("\nlogin: ")
+        run(line)
+        self.assertEqual(line.events, ["send root\r", "any # ", "expect # ", "send sync\r"])
+        line = FakeLine("\n# ")
+        run(line)
+        self.assertEqual(line.events, ["any # ", "expect # ", "send sync\r"])
+        line = FakeLine("\n~\n~\nvi text")
+        with self.assertRaisesRegex(bm.HarnessError, "not at a prompt"):
+            run(line)
+        self.assertEqual(line.events, [])
+
+    def test_line_expect_any_and_quiet(self):
+        """expect_any sees the current line after line_start and does not consume."""
+        line = bm.Line.__new__(bm.Line)
+        line.out = bm.ByteLog("test")
+        line.mark = 0
+        line.out.feed(b"old # \r\n# ")
+        line.line_start()
+        self.assertEqual(line.mark, 7)
+        line.expect_any(("# ", "Password:"), 0.1)
+        self.assertEqual(line.mark, 7)
+        line.expect("# ", 0.1)
+        self.assertEqual(line.mark, 10)
+        with self.assertRaises(bm.Timeout):
+            line.expect_any(("# ", "Password:"), 0.1)
+        t0 = time.monotonic()
+        line.out.wait_quiet(0.05, 1.0)
+        self.assertLess(time.monotonic() - t0, 0.5)
+
+    def test_syslog_lines_after_a_prompt(self):
+        """A syslog line after a prompt leaves the prompt as it was (panel.consoleMessages)."""
+        line = bm.Line.__new__(bm.Line)
+        line.out = bm.ByteLog("test")
+        line.mark = 0
+        line.out.feed(b"old\r\n# Mar 30 02:41:54 pdp11 login: ROOT LOGIN ON console\r\r\nOct  7 02:41:55 pdp11 a: b\r\n")
+        self.assertTrue(line.line_ends_in(("\n# ",)))
+        line.line_start()
+        line.expect_any(("# ", "Password:"), 0.1)
+        for raw, end in [(b"# rm -rf /usMar 30 02:41:54 pdp11 a: 1\r\n", "\n# "), (b"# Mar 30 02:41:54 pdp11 a: 1\r\nls", "\n# "),
+                         (b"# wall: hello\r\n", "\n# ")]:
+            line = bm.Line.__new__(bm.Line)
+            line.out = bm.ByteLog("test")
+            line.out.feed(raw)
+            self.assertFalse(line.line_ends_in((end,)), raw)
+
     def test_parse_stop(self):
         cases = [
             ("\nHALT instruction, PC: 000014 (HALT)\n", ("HALT instruction", "000014", "HALT")),
@@ -311,8 +430,15 @@ class CatalogTest(unittest.TestCase):
         for s in cat.values():
             self.assertTrue(s.ready)
             self.assertTrue(s.raw["notes"])
-            for st in s.session + s.shutdown:
+            for st in s.session:
                 self.assertTrue(st.expect or st.send)
+                self.assertFalse(st.if_line_ends or st.expect_any or st.otherwise)
+            for st in s.shutdown:
+                self.assertTrue(st.expect or st.expect_any or st.send or st.otherwise)
+            if s.shutdown:
+                # It looks before it types, and the last step tells how it ends.
+                self.assertTrue(s.shutdown[0].if_line_ends and s.shutdown[0].otherwise, s.id)
+                self.assertFalse(s.shutdown[-1].if_line_ends, s.id)
             for line in s.dialog:
                 self.assertRegex(line.lower(), r"^(expect|send)\b")
             if s.terminals:

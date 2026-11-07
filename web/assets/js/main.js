@@ -9,14 +9,15 @@ import { FrontPanel, loadGeometry } from './panel/panel.js';
 import { Toolbar } from './ui/toolbar.js';
 import { Toasts } from './ui/toasts.js';
 import { confirmDialog, confirmStop, osInMemory } from './ui/dialog.js';
-import { SystemChooser, installDialog, noLogin, progressText } from './ui/systems.js';
+import { SystemChooser, failureView, installDialog, noLogin, progressText, retryInstall } from './ui/systems.js';
 import { Help } from './ui/help.js';
 import { Tutorial } from './ui/tutorial.js';
-import { InsecureBanner, ReadyBanner, FirstRunOverlay } from './ui/banners.js';
+import { InsecureBanner, ReadyBanner, FirstRunOverlay, loginMessage } from './ui/banners.js';
 import { Popouts } from './ui/popout.js';
 import { Readouts, lampBits } from './ui/readouts.js';
-import { computeLayout } from './ui/layout.js';
+import { computeLayout, GAP } from './ui/layout.js';
 import { attachMenu } from './ui/menu.js';
+import { renderMarkdown } from './ui/markdown.js';
 import { $, Emitter, h, newReq } from './util.js';
 
 const params = new URLSearchParams(location.search);
@@ -24,6 +25,17 @@ const VIEW = ['panel', 'console'].includes(params.get('view')) ? params.get('vie
 const CHROME = params.get('chrome') !== '0';
 const VERSION = document.querySelector('meta[name="pdp11-version"]')?.content ?? '';
 const RELOAD_KEY = 'pdp11-reloaded-for';
+const FINAL_PHASES = ['done', 'error', 'cancelled'];
+const NOT_CONNECTED = 'Not connected to pdp11d: that was not sent. It reconnects by itself.';
+const STAGE_PAD = CHROME ? 8 : VIEW === 'panel' ? 12 : 8; // px around the stage: a kiosk panel keeps a small margin
+const FRAME_BORDER = 1; // px, console.css
+const FRAME_PAD = 10; // px, the console frame's usual margins around the terminal
+const BAR_MARGIN = 8; // px above the console's header bar
+const MIN_NOTES_H = 64; // px, lower than this the longer notes of the dock are not worth showing
+const NARROW_BAR = 480; // px, a narrower console header bar shortens its message
+const READOUTS_H = 30; // px, the compact octal readouts under a panel
+const READOUTS_DOCK_H = 52; // px, the large octal readouts in the dock
+const TOAST_MARGIN = 10; // px between the toasts and the window or a column's edge
 
 class App extends Emitter {
   constructor() {
@@ -48,6 +60,8 @@ class App extends Emitter {
     this.firstRunId = '';
     this.firstRunUntil = 0;
     this.logView = null; // the simulator log viewer while it is shown (sub=log)
+    this.licenceAccepted = new Set(); // systems whose licence was accepted in this page
+    this.dismissedFailures = new Map(); // system id -> the failure's text the user closed
   }
 
   // ---------------------------------------------------------------- start-up
@@ -80,8 +94,17 @@ class App extends Emitter {
         this.panel = new FrontPanel($('#panel-host'), geo, {
           send: (m) => this.send(m),
           confirmKeyOff: () => this.confirmKeyOff(),
-          // typing goes to the PDP-11: clicking the panel keeps the console focused
-          keepFocus: () => !!this.console?.term && document.activeElement === this.console.term.textarea,
+          // typing goes to the PDP-11: a mouse click on the panel leaves (or puts) the keyboard
+          // in the console; the panel's shortcuts take Tab or Shift+Tab (focus ring). No
+          // console in this window, or a tap (no on-screen keyboard): the control gets the focus
+          keepFocus: (e) => {
+            const term = this.console?.term;
+            if (!term || this.away.console) return false;
+            if (document.activeElement === term.textarea) return true;
+            if (e?.pointerType !== 'mouse' || document.activeElement?.closest?.('#panel-host')) return false;
+            term.focus();
+            return true;
+          },
         });
         this.panel.setLampPreset(this.prefs.get('lampStyle'));
         this.panel.setBranding(this.prefs.get('branding'));
@@ -95,14 +118,22 @@ class App extends Emitter {
         toast: (t, l) => this.toast(t, l),
       });
       this.ready.console = this.console;
-      // the ready banner gives way to the first key typed and keeps clear of the cursor
+      this.firstRun.console = this.console;
+      this.console.notConnected = () => this.notConnected();
+      this.console.onFontsChanged = () => this.layout();
+      this.ready.onPlace = () => this.placeToasts();
+      // the ready banner gives way to the first key typed; it and the booting card keep clear of the cursor
       this.console.onTyped = () => this.ready.hide();
-      this.console.onCursorMove = () => this.ready.placeSoon();
+      this.console.onCursorMove = () => {
+        this.ready.placeSoon();
+        this.firstRun.placeSoon();
+      };
       // a console that cannot keep up drops its backlog and reconnects: the
       // server replays its history instead (PROTOCOL §1)
       this.console.onBacklog = () => this.conn?.reconnect('console backlog');
       tasks.push(this.console.init().then(() => this.buildConsoleHead()));
     }
+    if (wantPanel && CHROME && VIEW === 'main') this.buildPanelDock();
     const results = await Promise.allSettled(tasks);
     for (const r of results) {
       if (r.status === 'rejected') {
@@ -128,10 +159,11 @@ class App extends Emitter {
     this.wireConnection();
     this.conn.connect();
     // layout changes element sizes: coalesce into one pass per frame (no ResizeObserver loops);
-    // the console header can wrap onto a second line
+    // the toolbar and the banners above the stage can change their height
     const ro = new ResizeObserver(() => this.scheduleLayout());
     ro.observe($('#stage'));
-    ro.observe($('#console-head'));
+    ro.observe($('#toolbar'));
+    ro.observe($('#banners'));
     window.addEventListener('resize', () => this.scheduleLayout());
     this.layout();
     this.exposeDebug();
@@ -159,6 +191,7 @@ class App extends Emitter {
     c.on('open', () => {
       this.connected = true;
       this.retryIn = 0;
+      this.toasts.dismiss('offline');
       this.update();
     });
     c.on('close', ({ retryIn }) => {
@@ -229,10 +262,10 @@ class App extends Emitter {
     if (prev && st.ready && !prev.ready) this.showReadyBanner(false);
     if (!st.ready && prev?.ready) this.ready.hide();
     this.checkNeedsInstall();
-    // a failed install was just reported by its progress message: not twice
-    if (st.run === 'error' && st.error && st.error !== this.lastError && !(this.progressError && st.error.includes(this.progressError))) {
+    // a failed install has its own report (taskFailed, the system's entry): not twice
+    if (st.run === 'error' && st.error && st.error !== this.lastError && !st.error.startsWith('installing ')) {
       // the simulator's own output usually says what went wrong
-      this.toasts.show(st.error, 'error', { action: { label: 'Simulator log', onClick: () => this.openHelp('log') } });
+      this.toasts.show(sentence(st.error), 'error', { action: { label: 'Simulator log', onClick: () => this.openHelp('log') } });
     }
     this.lastError = st.run === 'error' ? st.error : '';
     if (this.pendingAfterOff && st.run === 'off') {
@@ -241,6 +274,7 @@ class App extends Emitter {
       if (Date.now() < until) fn();
     }
     this.updateFirstRun();
+    this.updateFocusChip();
     this.tutorial.onState();
     this.update();
   }
@@ -272,13 +306,12 @@ class App extends Emitter {
     const key = `${p.task}:${p.id}`;
     this.progress.set(key, p);
     const sys = this.systems?.list?.find((s) => s.id === p.id);
+    // a message the user closed was about the attempt before this one
+    if (p.task !== 'shutdown') this.dismissedFailures.delete(p.id);
     if (p.task === 'shutdown') this.shutdownProgress(p, sys);
-    else if (p.phase === 'error') {
-      this.progressError = p.text ?? '';
-      this.toast(progressText(p, sys), 'error');
-    }
-    // the first-run overlay says when an install is done; a factory reset gets its toast
-    else if (p.phase === 'done' && (p.task !== 'install' || !this.firstRun.isShown())) this.toast(progressText(p, sys), 'info');
+    else if (p.phase === 'error') this.taskFailed(p, sys);
+    // the first-run overlay says when an install is done, the chooser's card when it is open; a factory reset gets its toast
+    else if (p.phase === 'done' && !this.chooser.isOpen() && (p.task !== 'install' || !this.firstRun.isShown())) this.toast(progressText(p, sys), 'info');
     if (['done', 'error', 'cancelled'].includes(p.phase)) {
       setTimeout(() => {
         if (this.progress.get(key) === p) {
@@ -293,8 +326,41 @@ class App extends Emitter {
   }
 
   /**
+   * A failed install or factory reset. The chooser's card and the first-run
+   * card say what happened and what to do; when neither is in view, a short
+   * toast leads to the chooser.
+   */
+  taskFailed(p, sys) {
+    const name = sys?.short || sys?.name || p.id;
+    const verb = p.task === 'factoryReset' ? `The factory reset of ${name} failed.` : `${name} could not be installed.`;
+    const summary = p.failure?.summary ?? '';
+    if (this.chooser.isOpen()) {
+      this.chooser.announce(`${verb} ${summary}`);
+      return;
+    }
+    if (p.task === 'install' && p.id === this.selectedSystem()?.id && !sys?.installed && !this.away.console && VIEW !== 'panel' && CHROME) return;
+    this.toasts.show(`${verb} ${summary || sentence(p.text ?? '')}`.trim(), 'error', { action: { label: 'What to do', onClick: () => this.openSystems(p.id) } });
+  }
+
+  /** Why the last install or reset of sys failed, unless the user closed that message. */
+  failureOf(sys) {
+    const last = this.progressFor('install', sys.id);
+    const reset = this.progressFor('factoryReset', sys.id);
+    const p = [reset, last].find((x) => x?.phase === 'error');
+    const f = sys.failure ?? p?.failure ?? (p ? { task: p.task, summary: '', hint: '', detail: p.text ?? '' } : null);
+    return f && this.dismissedFailures.get(sys.id) !== f.detail ? f : null;
+  }
+
+  dismissFailure(sys) {
+    const f = this.failureOf(sys);
+    if (f) this.dismissedFailures.set(sys.id, f.detail);
+    this.updateFirstRun();
+    this.chooser.refresh();
+  }
+
+  /**
    * One toast covers an OS shutdown: each step updates its text in place, the
-   * final message replaces it (R26). The server's toast about a failed or
+   * final message replaces it. The server's toast about a failed or
    * cancelled shutdown carries the request's req and takes its place too.
    */
   shutdownProgress(p, sys) {
@@ -322,27 +388,64 @@ class App extends Emitter {
     const sel = this.selectedSystem();
     const st = this.state;
     if (!sel || !st) return;
-    const prog = this.progressFor('install', sel.id);
-    const installing = sel.installing || (prog && !['done', 'error', 'cancelled'].includes(prog.phase));
+    const running = (p) => (p && !FINAL_PHASES.includes(p.phase) ? p : null);
+    const resetting = sel.task === 'factoryReset' || !!running(this.progressFor('factoryReset', sel.id));
+    const prog = running(this.progressFor(resetting ? 'factoryReset' : 'install', sel.id));
+    const installing = sel.installing || !!prog;
     if (installing && !sel.installed) {
       this.firstRunId = sel.id;
       this.firstRunUntil = 0;
-      this.firstRun.show({ title: `Setting up ${sel.name}`, text: prog ? progressText(prog, sel) : `Preparing ${sel.name}…`, progress: prog });
+      this.firstRun.show({ title: `${resetting ? 'Restoring' : 'Setting up'} ${sel.name}`, text: prog ? progressText(prog, sel) : `Preparing ${sel.name}…`, progress: prog });
+      return;
+    }
+    const failure = this.failureOf(sel);
+    if (failure && !sel.installed && !this.away.console) {
+      const title = `${sel.short || sel.name} could not be installed`;
+      this.firstRun.showCard(failure.detail, `${title}. ${failure.summary}`, () => failureView(failure, {
+        title,
+        onDismiss: () => this.dismissFailure(sel),
+        actions: [
+          h('button', { type: 'button', class: 'btn btn-primary', onclick: () => retryInstall(this, sel) }, 'Try again'),
+          h('button', { type: 'button', class: 'btn', onclick: () => this.openSystems(sel.id) }, 'Other systems…'),
+        ],
+      }), 'failure-card');
+      return;
+    }
+    // its licence dialog was cancelled: the way forward stays in view
+    if (st.needsInstall?.id === sel.id && !sel.installed && !this.away.console) {
+      const title = `${sel.short || sel.name} is not installed`;
+      this.firstRun.showCard(`needs ${sel.id}`, `${title}.`, () => h('div', {},
+        h('h2', {}, title),
+        h('p', {}, 'Its licence must be accepted before it can be installed. You can also choose another system.'),
+        h('div', { class: 'row' },
+          h('button', { type: 'button', class: 'btn', onclick: () => this.openSystems(sel.id) }, 'Other systems…'),
+          h('button', { type: 'button', class: 'btn btn-primary', onclick: () => installDialog(this, sel) }, 'Licence and install'))));
       return;
     }
     if (this.firstRunId === sel.id && sel.installed) {
       // after the system's boot timeout the server warns (toast); the overlay
       // then gets out of the way of the console
-      if (!this.firstRunUntil) this.firstRunUntil = Date.now() + 1000 * (sel.bootTimeoutSec > 0 ? sel.bootTimeoutSec : 120);
-      if (!st.ready && ['starting', 'running', 'halted'].includes(st.run) && Date.now() < this.firstRunUntil) {
+      const now = Date.now();
+      if (!this.firstRunUntil) {
+        this.firstRunUntil = now + 1000 * (sel.bootTimeoutSec > 0 ? sel.bootTimeoutSec : 120);
+        // the power-on follows a finished install: a moment may pass until the state says so
+        const done = [this.progressFor('install', sel.id), this.progressFor('factoryReset', sel.id)].some((p) => p?.phase === 'done');
+        this.firstRunPowering = st.power === 'on' && done ? now + 3000 : 0;
+        this.firstRunOldError = st.error;
+      }
+      const booting = ['starting', 'running', 'halted'].includes(st.run);
+      // a new error ends the wait: the simulator failed to start (the old one is the install's, until the power-on)
+      const failed = st.run === 'error' && st.error && st.error !== this.firstRunOldError;
+      if (!st.ready && (booting || (now < this.firstRunPowering && !failed)) && now < this.firstRunUntil) {
         this.firstRun.show({
           title: `Booting ${sel.name}…`,
           text: noLogin(sel)
             ? 'Watch the console and the lamps: the console is ready when the system prompt appears.'
             : 'Watch the console and the lamps: the login prompt appears when the system is up.',
+          compact: true,
         });
         clearTimeout(this.firstRunTimer);
-        this.firstRunTimer = setTimeout(() => this.updateFirstRun(), Math.max(0, this.firstRunUntil - Date.now()) + 50);
+        this.firstRunTimer = setTimeout(() => this.updateFirstRun(), Math.max(0, (booting ? this.firstRunUntil : this.firstRunPowering) - now) + 50);
         return;
       }
       this.firstRunId = '';
@@ -356,8 +459,13 @@ class App extends Emitter {
     const m = msg.req || msg.type === 'ping' ? msg : { ...msg, req: newReq() };
     const ok = this.conn?.send(m) ?? false;
     this.emit('sent', m);
-    if (!ok && msg.type !== 'ping') this.toast('Not connected to pdp11d', 'warn');
+    if (!ok && msg.type !== 'ping') this.notConnected();
     return ok;
+  }
+
+  /** Something could not be sent: one message for all of it, gone when the connection is back. */
+  notConnected() {
+    this.toasts.show(NOT_CONNECTED, 'warn', { key: 'offline' });
   }
 
   onSent(fn) {
@@ -400,8 +508,8 @@ class App extends Emitter {
 
   // ---------------------------------------------------------------- actions (toolbar)
 
-  openSystems() {
-    this.chooser.open();
+  openSystems(focusId) {
+    this.chooser.open(focusId);
   }
 
   openHelp(tab) {
@@ -496,6 +604,7 @@ class App extends Emitter {
     if (!st || !sys) return;
     if (st.run === 'off' || st.run === 'error') {
       this.send({ type: 'selectSystem', id });
+      this.systemChosen();
       return;
     }
     const v = await this.confirmStop(`Switch to ${sys.name}`);
@@ -507,6 +616,13 @@ class App extends Emitter {
     });
     if (v === 'shutdown') this.send({ type: 'shutdownOS' });
     else this.send({ type: 'key', pos: 'off' });
+    this.systemChosen();
+  }
+
+  /** The chooser has done its job: what comes next happens on the console. */
+  systemChosen() {
+    this.chooser.close();
+    if (!this.away.console) this.console?.focus();
   }
 
   /** Runs fn once the machine is off (after a clean shutdown or pulling the plug), within 2 minutes. */
@@ -523,6 +639,7 @@ class App extends Emitter {
     $(`#${view}-away`).hidden = !away;
     if (view === 'panel') {
       $('#panel-host').hidden = away;
+      $('#panel-dock').hidden = away && VIEW === 'main';
       if (away) this.panel?.clearLamps();
     } else {
       $('#console-host').hidden = away;
@@ -539,25 +656,93 @@ class App extends Emitter {
     const head = $('#console-head');
     head.textContent = '';
     if (!CHROME) return;
-    this.keyHelpEl = h('span', { class: 'keyhelp', title: '' });
+    // the bar keeps its height and the frame its place whatever the message is
+    this.focusEl = h('span', { class: 'focus-chip', onclick: () => this.console.focus() }, h('span', {}, 'Click to type'));
+    this.console.onFocusChange = (on) => {
+      this.consoleFocused = on;
+      this.updateFocusChip();
+    };
     this.pasteEl = h('span', { class: 'paste-progress', hidden: true },
       h('span', { class: 'paste-text' }, ''),
       h('button', { type: 'button', class: 'btn', onclick: () => this.cancelPaste() }, 'Cancel'));
     const authentic = h('input', { type: 'checkbox', checked: this.prefs.get('authenticKeys') });
     authentic.addEventListener('change', () => this.prefs.set('authenticKeys', authentic.checked));
     this.authenticBox = authentic;
+    const authenticLabel = h('label', { class: 'toggle', title: 'Raw xterm keys: Backspace sends DEL, Ctrl+C sends ^C' }, authentic, 'Authentic keys');
+    this.keepTyping(authenticLabel);
     const sendKey = h('button', { type: 'button', class: 'btn', title: 'Send a control key the browser would otherwise keep' }, 'Send key ▾');
     // sendKey focuses the terminal: closing the menu must not take the focus back
-    attachMenu(sendKey, () => SEND_KEYS.map(([label, seq]) => ({ label, refocus: false, onSelect: () => this.console.sendKey(seq) })));
+    attachMenu(sendKey, () => [
+      { title: 'Usual meaning; it depends on the system' },
+      ...SEND_KEYS.map(([label, seq, hint]) => ({ label, hint: this.sendKeyHint(seq, hint), refocus: false, onSelect: () => this.console.sendKey(seq) })),
+    ], { className: 'key-menu' });
+    // where the header has no room for the key help, it opens from the bar
+    this.keysBtn = h('button', { type: 'button', class: 'btn keys-btn', title: 'The keys of this system', hidden: true }, 'Keys ▾');
+    attachMenu(this.keysBtn, () => this.keyHelpItems().map((label) => ({ label, refocus: false, onSelect: () => this.console.focus() })));
+    this.loginEl = h('p', { class: 'login-line' });
+    this.keyHelpEl = h('ul', { class: 'keyhelp hint-list' });
+    // a scroller, not a Tab stop: Shift+Tab goes from the terminal to its header's buttons (Help has the same text)
+    this.tryEl = h('div', { class: 'try-notes', tabindex: -1 });
     head.append(
-      h('span', { class: 'title' }, 'Console'),
-      this.keyHelpEl,
-      this.pasteEl,
-      h('label', { class: 'toggle', title: 'Raw xterm keys: Backspace sends DEL, Ctrl+C sends ^C' }, authentic, 'Authentic keys'),
-      sendKey,
+      h('div', { class: 'head-bar' },
+        h('span', { class: 'title' }, 'Console'),
+        h('span', { class: 'head-msg' }, this.focusEl, this.pasteEl),
+        authenticLabel,
+        this.keysBtn,
+        sendKey),
+      h('div', { class: 'head-info' }, this.loginEl, this.keyHelpEl),
+      this.tryEl,
     );
     this.console.onPasteProgress = () => this.updatePasteStatus();
     this.updateConsoleHead();
+  }
+
+  /** What a Send key entry does here: the erase and interrupt keys are the system's own. */
+  sendKeyHint(seq, hint) {
+    const k = this.selectedSystem()?.console;
+    if (seq === '\x7f') return k?.interrupt === 'del' ? 'Interrupt a program' : k?.backspace === 'del' ? 'Erase a character' : hint;
+    if (seq === '\x03' && k?.interrupt === 'del') return 'Nothing special here (DEL interrupts)';
+    return hint;
+  }
+
+  /** A mouse click on a switch in the header or the dock leaves the keyboard in the console; Space on it keeps the focus there. */
+  keepTyping(label) {
+    label.addEventListener('click', (e) => {
+      if (e.detail > 0) setTimeout(() => this.console?.focus());
+    });
+  }
+
+  /** The dock under the panel: its switches and how to work it. */
+  buildPanelDock() {
+    const bar = $('#panel-bar');
+    const readouts = h('input', { type: 'checkbox', checked: this.prefs.get('readouts') });
+    readouts.addEventListener('change', () => this.prefs.set('readouts', readouts.checked));
+    this.readoutsBox = readouts;
+    const readoutsLabel = h('label', { class: 'toggle grow', title: 'SR, ADDRESS and DATA as octal numbers' }, readouts, 'Octal readouts');
+    this.keepTyping(readoutsLabel);
+    bar.append(
+      h('span', { class: 'title' }, 'Front panel'),
+      readoutsLabel,
+      h('button', { type: 'button', class: 'btn', title: 'What every control does', onclick: () => this.openHelp('panel') }, 'Panel guide'),
+      h('button', { type: 'button', class: 'btn', title: 'Toggle a program in with the switches', onclick: () => this.openTutorial() }, 'Toggle-in tutorial'),
+    );
+    const key = (...keys) => keys.map((k) => h('kbd', {}, k));
+    const hint = (...parts) => h('li', {}, ...parts);
+    $('#panel-notes').append(
+      hint('Click a switch to flip it; drag across several to set them all'),
+      hint('Click LOAD ADRS, EXAM, DEP, CONT or START to press it'),
+      hint('Click a knob or the key on its right or left half to turn it'),
+      hint(...key('Shift+Tab'), ' from the console reaches the panel: a ring shows the control'),
+    );
+    const shortcut = (keys, text) => h('li', {}, ...key(...keys), ` ${text}`);
+    $('#panel-keys').append(
+      h('h3', {}, 'With the keyboard on the panel'),
+      h('ul', { class: 'hint-list shortcuts' },
+        shortcut(['0–7'], 'shift a digit into the switches'), shortcut(['Esc'], 'clears them'),
+        shortcut(['L'], 'LOAD ADRS'), shortcut(['E'], 'EXAM'), shortcut(['D'], 'DEP'), shortcut(['C'], 'CONT'), shortcut(['S'], 'START'),
+        shortcut(['H'], 'ENABLE/HALT'), shortcut(['B'], 'S INST/S BUS CYCLE'), shortcut(['T'], 'LAMP TEST (hold)'),
+        shortcut(['[', ']'], 'ADDRESS knob'), shortcut(['{', '}'], 'DATA knob'), shortcut(['K'], 'key switch')),
+    );
   }
 
   /**
@@ -587,13 +772,53 @@ class App extends Emitter {
     this.console.cancelPaste();
   }
 
+  /** The selected system's key help, one entry per key. */
+  keyHelpItems() {
+    const k = this.selectedSystem()?.console;
+    if (!k) return [];
+    if (k.keyHelp) return k.keyHelp.split(/\s+·\s+/);
+    return [`Backspace = ${k.backspace === 'bs' ? 'BS' : k.backspace === '#' ? '#' : 'DEL'}`, `Ctrl+C = ${k.interrupt === 'del' ? 'DEL' : '^C'}`];
+  }
+
+  /** What the header's slot says: with the machine off, typing would reach nothing. */
+  updateFocusChip() {
+    if (!this.focusEl) return;
+    const off = ['off', 'error'].includes(this.state?.run);
+    const typing = this.consoleFocused && !off;
+    this.focusEl.classList.toggle('on', typing);
+    const text = this.focusEl.firstChild;
+    text.textContent = '';
+    if (typing) text.append('Typing', h('span', { class: 'long' }, ' to the PDP-11'));
+    else text.append(this.consoleFocused ? 'Machine off' : 'Click to type');
+  }
+
   updateConsoleHead() {
     if (!this.keyHelpEl) return;
     const sys = this.selectedSystem();
-    const k = sys?.console;
-    const text = k?.keyHelp || (k ? `Backspace = ${k.backspace === 'bs' ? 'BS' : k.backspace === '#' ? '#' : 'DEL'}, Ctrl+C = ${k.interrupt === 'del' ? 'DEL' : '^C'}` : '');
-    this.keyHelpEl.textContent = text;
-    this.keyHelpEl.title = text;
+    // the systems list comes often during installs: the notes keep their scroll position
+    const sig = JSON.stringify([sys?.id, sys?.console, sys?.credentials, sys?.notes, sys?.description]);
+    if (sig === this.headSig) return;
+    this.headSig = sig;
+    const items = this.keyHelpItems();
+    // a key help that starts with the login says it better than the accounts can
+    const login = items.find((t) => /^log in/i.test(t));
+    this.keyHelpEl.textContent = '';
+    this.keyHelpEl.append(...items.filter((t) => t !== login).map((text) => {
+      // the key that starts an entry stands out: "Ctrl+U kills the line"
+      const m = text.match(/^(Backspace|Delete|Ctrl\+\S+|@)(\s.*)$/);
+      return h('li', {}, ...(m ? [h('kbd', {}, m[1]), m[2]] : [text]));
+    }));
+    this.loginEl.textContent = '';
+    if (login) this.loginEl.append(h('strong', {}, sys?.short || sys?.name || ''), ` — ${login[0].toLowerCase()}${login.slice(1)}`);
+    else this.loginEl.append(...loginMessage(sys));
+    // the room in the dock is for what to do with this system
+    this.tryEl.textContent = '';
+    const tries = sys?.notes?.match(/^## Things to try[^\n]*\n([\s\S]*?)(?=^## |(?![\s\S]))/m)?.[1];
+    if (tries) this.tryEl.append(h('h3', {}, 'Things to try'), renderMarkdown(tries));
+    const about = $('#panel-about');
+    about.textContent = '';
+    if (sys?.description) about.append(h('h3', {}, sys.name), sys.description);
+    this.scheduleLayout();
   }
 
   // ---------------------------------------------------------------- prefs
@@ -612,6 +837,7 @@ class App extends Emitter {
       if (show) this.readouts?.start();
       else this.readouts?.stop();
       this.layout();
+      if (this.readoutsBox) this.readoutsBox.checked = !!v;
     } else if (k === 'authenticKeys' && this.authenticBox) this.authenticBox.checked = !!v;
     if (k === 'cols') this.layout();
   }
@@ -637,46 +863,214 @@ class App extends Emitter {
     if (!stage) return;
     // measured from the viewport, not the stage: in the scrolling (mobile)
     // layout the stage grows with its content
-    const cs = getComputedStyle(stage);
     const above = ($('#toolbar')?.offsetHeight ?? 0) + ($('#banners')?.offsetHeight ?? 0);
-    const W = document.documentElement.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-    const pageH = window.innerHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const W = document.documentElement.clientWidth - 2 * STAGE_PAD;
+    const pageH = window.innerHeight - 2 * STAGE_PAD;
     const H = pageH - above;
     const showPanel = !!this.panel && !this.away.panel;
-    const showConsole = !!this.console && !this.away.console;
+    const showConsole = !!this.console?.frame && !this.away.console;
     // a view in another window leaves its "Bring back" notice in the row
     const notice = showPanel !== showConsole ? [$('#panel-away'), $('#console-away')].find((e) => !e.hidden) : null;
-    const noticeW = notice ? notice.offsetWidth + parseFloat(cs.columnGap || 0) : 0;
-    const head = $('#console-head');
-    const headH = showConsole && CHROME ? Math.max(34, head.offsetHeight) : 0;
-    const readoutsH = showPanel && !$('#readouts').hidden ? 24 : 0;
-    const chrome = { w: 22, h: 22 + headH };
+    const noticeW = notice ? notice.offsetWidth + GAP : 0;
+    const readouts = showPanel && !$('#readouts').hidden;
+    const border = 2 * FRAME_BORDER;
+    const chrome = {
+      x: border + 2 * FRAME_PAD, y: border + 2 * FRAME_PAD, minY: border + 2, mx: border + 2 * 3, border,
+      bar: showConsole && CHROME ? this.barHeight() + BAR_MARGIN : 0,
+    };
     const L = computeLayout({
-      W: W - noticeW, H, pageH, showPanel, showConsole, panelExtraH: readoutsH, consoleChrome: chrome,
-      consoleFit: (box) => this.console.predict(box),
+      W: W - noticeW, H, pageH, showPanel, showConsole, chrome,
+      panelExtraH: readouts ? READOUTS_H : 0, dockExtraH: readouts ? READOUTS_DOCK_H : 0,
+      fonts: this.console?.fontChoices() ?? [],
     });
-    if (L.layout === 'none' && VIEW === 'main') {
-      // both views are popped out: show the two "bring back" notices side by side
-      stage.dataset.layout = 'side';
-    } else {
-      stage.dataset.layout = L.layout;
-    }
+    // both views are popped out: the two "bring back" notices side by side
+    stage.dataset.layout = L.layout === 'none' && VIEW === 'main' ? 'away' : L.layout;
     document.body.classList.toggle('scroll', L.layout === 'mobile');
     if (L.panel && this.panel) {
       $('#panel-host').style.width = `${L.panel.w}px`;
+      $('#panel-area').style.width = `${L.panel.w}px`;
       $('#landscape-hint').hidden = !(L.layout === 'mobile' && innerHeight > innerWidth);
+      if (L.layout === 'wide') {
+        stage.style.setProperty('--panel-w', `${L.panel.w}px`);
+        stage.style.setProperty('--panel-h', `${L.panel.h + (readouts ? READOUTS_H : 0)}px`);
+        stage.style.setProperty('--beside-panel', `${L.frame.w - L.panel.w}px`);
+      }
+    } else {
+      $('#panel-area').style.width = ''; // in another window: the notice sizes the area
     }
-    if (L.consoleBox && this.console) {
-      // phones: keep the console readable and let it scroll sideways instead
-      const minSize = L.layout === 'mobile' ? 12 : 0;
-      const sz = this.console.fit(Math.max(50, L.consoleBox.w), Math.max(50, L.consoleBox.h), { minSize });
-      $('#console-area').style.width = L.layout === 'mobile' ? '100%' : `${sz.w + chrome.w}px`;
+    if (L.font && this.console) {
+      this.console.fit(L.font);
+      const frame = this.console.frame;
+      // grows if a browser's terminal is wider than planned: the frame, not the text, gives way
+      frame.style.width = 'max-content';
+      frame.style.minWidth = `${L.frame.w}px`;
+      frame.style.height = `${L.frame.h}px`;
+      $('#console-area').style.width = `${Math.min(L.frame.w, W)}px`;
     } else if (this.console) {
       $('#console-area').style.width = ''; // in another window: the notice sizes the area
     }
     this.lastLayout = { ...L, W, H };
+    this.layoutDock(this.lastLayout, stage, notice, readouts ? READOUTS_H : 0);
+    if (L.font) this.centreTerminal(L);
     // xterm.js applies a new font size on its next render
-    requestAnimationFrame(() => this.ready.place());
+    requestAnimationFrame(() => {
+      this.ready.place();
+      this.firstRun.place();
+      this.tutorial.place();
+    });
+  }
+
+  /**
+   * The terminal in the middle of its frame, on whole device pixels: a font on
+   * the pixel grid stays on it. Runs once the frame has its place on the page.
+   */
+  centreTerminal(L) {
+    const frame = this.console.frame;
+    const dpr = window.devicePixelRatio || 1;
+    const at = frame.getBoundingClientRect();
+    const padding = (start, free) => {
+      const first = Math.round((start + FRAME_BORDER + free / 2) * dpr) / dpr - start - FRAME_BORDER;
+      return [Math.max(0, first), Math.max(0, free - first)];
+    };
+    const [top, bottom] = padding(at.top, L.frame.h - L.font.h - 2 * FRAME_BORDER);
+    const [left, right] = padding(at.left, L.frame.w - L.font.w - 2 * FRAME_BORDER);
+    frame.style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
+  }
+
+  barHeight() {
+    return $('#console-head .head-bar')?.offsetHeight || 34;
+  }
+
+  /**
+   * The zones of the page: the machine (panel and console) in the dark well
+   * under the toolbar, the dock with its notes below it, reaching the window's
+   * bottom. Text in the dock gives way when it has no room.
+   */
+  layoutDock(L, stage, notice, readoutsH) {
+    // a notice beside the remaining view shares its height
+    for (const n of [$('#panel-away'), $('#console-away')]) n.style.height = n === notice ? `${L.frame?.h ?? L.panel?.h}px` : '';
+    const hasHead = CHROME && this.keyHelpEl && ['side', 'stack', 'console', 'wide'].includes(L.layout);
+    const docked = CHROME && ['side', 'stack', 'console'].includes(L.layout);
+    stage.classList.toggle('docked', docked);
+    // the machine's margin grows with the height to spare (the dock takes the rest)
+    const machineH = L.layout === 'stack' ? L.panel.h + readoutsH + GAP + L.frame.h : L.layout === 'side' ? L.panel.h : L.frame?.h ?? 0;
+    let margin = docked ? Math.round(Math.max(0, Math.min(16, (L.H - machineH - this.barHeight() - BAR_MARGIN) * 0.05))) : 0;
+    // a kiosk has no dock: the machine in the middle of the page, with its edges in line
+    if (!CHROME && L.layout === 'side') margin = Math.max(0, Math.floor((L.H - machineH - (readoutsH ? READOUTS_DOCK_H : 0)) / 2));
+    stage.style.padding = `${STAGE_PAD}px`;
+    stage.style.paddingTop = `${STAGE_PAD + margin}px`;
+    stage.style.setProperty('--dock-gap', `${margin}px`);
+    if (docked) {
+      const dockTop = (L.font ? this.console.frame : $('#panel-host')).getBoundingClientRect().bottom + margin + BAR_MARGIN;
+      stage.style.setProperty('--dock-top', `${Math.round(dockTop - stage.getBoundingClientRect().top)}px`);
+    }
+    const head = $('#console-head');
+    const bar = head.querySelector('.head-bar');
+    bar?.classList.toggle('narrow', bar.offsetWidth < NARROW_BAR);
+    // what does not fit under the bars gives way: the key help opens from its button then
+    const bottom = L.layout === 'wide' ? head.getBoundingClientRect().bottom - 6 : window.innerHeight - STAGE_PAD;
+    const fits = (el) => {
+      el.classList.remove('gone');
+      return el.getBoundingClientRect().bottom <= bottom;
+    };
+    if (hasHead) {
+      const info = head.querySelector('.head-info');
+      this.loginEl.classList.remove('gone');
+      let ok = fits(info);
+      if (!ok) {
+        this.loginEl.classList.add('gone');
+        ok = fits(info);
+      }
+      info.classList.toggle('gone', !ok);
+      this.keysBtn.hidden = ok;
+      this.tryEl.classList.remove('gone');
+      this.tryEl.classList.toggle('gone', !ok || !this.tryEl.childElementCount || bottom - this.tryEl.getBoundingClientRect().top < MIN_NOTES_H);
+    } else if (this.keysBtn) {
+      // the page scrolls, or the view is alone: nothing needs to give way
+      this.keysBtn.hidden = true;
+      for (const el of [head.querySelector('.head-info'), this.loginEl, this.tryEl]) el.classList.remove('gone');
+    }
+    if (L.layout === 'side') {
+      // in the order of importance: each stays only if it still fits under the ones before it
+      for (const el of [$('#panel-notes'), $('#panel-keys'), $('#panel-about')]) el.classList.toggle('gone', !el.childNodes.length || !fits(el));
+    }
+    this.placeToasts();
+  }
+
+  /** The tutorial card's place: the dock under the panel, below its bar and readouts, or the card beside the panel. */
+  tutorialDock() {
+    const L = this.lastLayout;
+    if (L?.layout === 'wide') {
+      const head = $('#console-head').getBoundingClientRect();
+      const top = $('#console-head .head-bar').getBoundingClientRect().bottom;
+      return { left: head.left + 1, top, width: head.width - 2, height: head.bottom - top - 1 };
+    }
+    if (L?.layout !== 'side' || !$('#stage').classList.contains('docked')) return null;
+    const panel = $('#panel-host').getBoundingClientRect();
+    const r = $('#readouts');
+    const top = (r.hidden ? $('#panel-bar') : r).getBoundingClientRect().bottom + 4;
+    return { left: panel.left, top, width: panel.width, height: window.innerHeight - STAGE_PAD - top };
+  }
+
+  /** Where the tutorial card floats without a dock: over the console, which it may hide, as the panel is what it is about. */
+  tutorialFloat() {
+    const L = this.lastLayout;
+    if (!L?.font || L.layout === 'mobile') return null;
+    const f = this.console.frame.getBoundingClientRect();
+    const top = Math.max(STAGE_PAD, f.top + 6);
+    return { top, right: Math.max(STAGE_PAD, document.documentElement.clientWidth - f.right + 6), height: Math.min(f.bottom, window.innerHeight) - 6 - top };
+  }
+
+  /** Where toasts go: free space in the dock first, then places that hide the least (UI.md §2). */
+  placeToasts() {
+    const L = this.lastLayout;
+    if (!L) return;
+    const iw = document.documentElement.clientWidth;
+    const ih = window.innerHeight;
+    const m = TOAST_MARGIN;
+    if (L.layout === 'mobile') {
+      // the page scrolls and an on-screen keyboard covers the bottom
+      this.toasts.setZones([{ top: m, right: m, width: iw - 2 * m, maxH: ih - 2 * m }]);
+      return;
+    }
+    const zones = [];
+    const rect = (e) => (e?.getClientRects().length ? e.getBoundingClientRect() : null);
+    const frame = L.font ? rect(this.console.frame) : null;
+    const panel = L.panel ? rect($('#panel-host')) : null;
+    const under = (col, ...above) => ({
+      bottom: m, right: Math.max(m, iw - col.right), width: col.width,
+      maxH: ih - m - 6 - Math.max(col.bottom, ...above.filter(Boolean).map((r) => r.bottom)),
+    });
+    const beside = (col) => ({ top: col.top, right: m, width: iw - col.right - 2 * m, maxH: col.height });
+    const banner = rect($('.ready-banner'));
+    const headBar = rect($('#console-head .head-bar'));
+    if (L.layout === 'wide') {
+      // in the card beside the panel, over the things to try
+      const card = rect($('#console-head'));
+      const top = Math.max(headBar.bottom, rect($('#console-head .head-info'))?.bottom ?? 0, banner && banner.top < card.bottom ? banner.bottom : 0) + 6;
+      if (!this.tutorial.isDocked()) zones.push({ top, right: iw - card.right + 10, width: card.width - 20, maxH: card.bottom - top - 6 });
+    }
+    if ($('#stage').classList.contains('docked')) {
+      const dockLeft = panel && L.layout === 'side' && !this.tutorial.isDocked();
+      // the dock's free space, then over its notes (they can wait, the toasts go away)
+      if (dockLeft) zones.push(under(panel, rect($('#panel-bar')), rect($('#readouts')), rect($('#panel-notes')), rect($('#panel-keys')), rect($('#panel-about'))));
+      if (frame) zones.push(under(frame, headBar, rect($('#console-head .head-info')), banner, rect($('.try-notes'))));
+      if (dockLeft) zones.push(under(panel, rect($('#panel-bar')), rect($('#readouts'))));
+      if (frame) zones.push(under(frame, headBar, rect($('#console-head .head-info')), banner));
+    }
+    // a margin beside the machine in a stacked layout
+    if (panel && L.layout === 'stack') zones.push(beside(panel));
+    if (frame && (L.layout === 'stack' || L.layout === 'wide')) zones.push(beside(frame));
+    // the blank top right of the panel's bezel; the terminal's top, under a ready banner there
+    if (panel) zones.push({ top: panel.top + 6, right: iw - panel.right + 6, width: panel.width * 0.34, maxH: panel.height * 0.12 });
+    if (frame) {
+      // (a kiosk has its "Click to type" pill at the frame's top)
+      const top = Math.max(frame.top + (CHROME ? 0 : 28), banner && banner.top < frame.bottom ? banner.bottom : 0) + 6;
+      zones.push({ top, right: iw - frame.right + 16, width: frame.width - 32, maxH: frame.bottom - top });
+    }
+    if (!frame && panel) zones.push({ top: panel.top + 6, right: iw - panel.right + 6, width: panel.width - 12, maxH: panel.height * 0.7 });
+    if (!zones.length) zones.push({ bottom: m, right: m, width: iw - 2 * m, maxH: ih - 2 * m });
+    this.toasts.setZones(zones);
   }
 
   exposeDebug() {
@@ -699,6 +1093,11 @@ class App extends Emitter {
       app,
     };
   }
+}
+
+/** A server's error message as a sentence: "The simulator…" for "the simulator…". */
+function sentence(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 const app = new App();

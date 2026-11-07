@@ -1,6 +1,7 @@
 // Optional octal readouts under the panel (accessibility, UI.md §2):
-// switch register, ADDRESS and DATA lamps. Visible digits update a few times
-// a second; the screen-reader text at most once a second (UI.md §4).
+// switch register, ADDRESS and DATA lamps as a row of labelled digits. Visible
+// digits update a few times a second; the screen-reader text at most once a
+// second (UI.md §4).
 
 import { h, octal } from '../util.js';
 
@@ -22,12 +23,8 @@ export class Readouts {
     this.addr = h('b', {}, '--------');
     this.data = h('b', {}, '------');
     this.sronly = h('span', { class: 'sr-only', 'aria-live': 'off' });
-    host.append(
-      h('span', { 'aria-hidden': 'true' }, 'SR ', this.sr),
-      h('span', { 'aria-hidden': 'true' }, 'ADDRESS ', this.addr),
-      h('span', { 'aria-hidden': 'true' }, 'DATA ', this.data),
-      this.sronly,
-    );
+    const part = (label, value) => h('span', { class: 'readout', 'aria-hidden': 'true' }, h('span', { class: 'readout-label' }, label), value);
+    host.append(part('SR', this.sr), part('ADDRESS', this.addr), part('DATA', this.data), this.sronly);
     this.timer = 0;
     this.lastSr = 0;
   }

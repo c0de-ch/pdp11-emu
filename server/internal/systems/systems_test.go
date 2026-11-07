@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -42,7 +43,9 @@ func TestListAndGet(t *testing.T) {
 		t.Fatal("unknown id found")
 	}
 	steps := m.ShutdownScript("bsd")
-	if len(steps) != 2 || steps[0].Send != "shutdown -h now\r" || steps[1].Expect != "halting" || steps[1].TimeoutSec != 60 {
+	if len(steps) != 4 || !slices.Equal(steps[0].IfLineEnds, []string{"\n# "}) || steps[0].Else != "log in first" ||
+		!slices.Equal(steps[1].ExpectAny, []string{"# ", "Password:"}) ||
+		steps[2].Send != "shutdown -h now\r" || steps[3].Expect != "halting" || steps[3].TimeoutSec != 60 {
 		t.Fatalf("shutdown script %+v", steps)
 	}
 	if m.ShutdownScript("v6") != nil {

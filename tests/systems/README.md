@@ -56,8 +56,9 @@ python3 -I tests/systems/bootmatrix.py --system bsd211 --system bsd211-pl499 \
    60 Hz gains 20 %).
 7. **Idle CPU.** Host CPU of the simulator process over `--idle-secs` (default 10) while the
    system sits at its prompt.
-8. **Shutdown.** `shutdownScript` as pdp11d's "Shut down OS" types it (with its 250 ms pause
-   between an `expect` match and the next `send`). If the script ends with a `send`, the CPU
+8. **Shutdown.** `shutdownScript` as pdp11d's "Shut down OS" types it (looking at the console
+   for `ifLineEnds`, with its 250 ms pause between an `expect` match and the next `send`; an `else`
+   fails the run). If the script ends with a `send`, the CPU
    must stop with `HALT instruction` within 30 s; if it ends with an `expect`, the harness
    waits 3 s and halts the CPU from the front panel. Then `quit`, and the simulator must exit
    with status 0.
@@ -87,7 +88,8 @@ client (`ws?sub=panel,console,log`) waits for `state.ready`, types `tests.sessio
 `shutdownOS` (RT-11: key OFF) and requires run off with the key at OFF within the script's
 budget; SIGTERM must then end pdp11d with status 0. 2.11BSD also gets a second start (key to
 POWER: no fsck, ready in < 20 s; a telnet login on a DZ line with `PDP11_TTY_TELNET`; SIGTERM
-with `PDP11_SHUTDOWN_ON_STOP=1` must shut the OS down cleanly) and a third (autostart, the key
+with `PDP11_SHUTDOWN_ON_STOP=1` must shut the OS down cleanly, with syslog's line about that
+login after the console's `login:` prompt) and a third (autostart, the key
 stayed at POWER; no fsck).
 
 ```
@@ -101,3 +103,22 @@ session, panel frames in 2 s, shutdown s, SIGTERM → exit s) and writes `matrix
 `pdp11d-<n>.log`, `console-<n>.txt` and `events-<n>.txt` (timestamped WebSocket messages and
 typed input) under `-work`. `-clock` also checks, for the Unix systems, RT-11 and RSX after the
 session, that the guest clock keeps time while the system idles (`date`, 20 s, `date`).
+
+`server/cmd/pdp11d/states_test.go` (same build tag and flags) brings the console of every system
+with a shutdown script into every state of `docs/DESIGN.md` §7 and stops the machine from there,
+with `shutdownOS` and with SIGTERM under `PDP11_SHUTDOWN_ON_STOP=1`: a state the script recovers
+from must end in a clean stop (2.11BSD: the next boot does not check the file systems), a state
+it refuses must fail within 10 s having typed nothing, with the `warn` toast and the power still
+on, and after the state was left by hand (which shows that the program kept its work) `shutdownOS`
+must succeed; SIGTERM must log the reason at warn and power off. About an hour for all systems;
+the logs and console captures stay under `-work`.
+
+```
+go test -tags matrix -run TestShutdownStates -timeout 3h -v ./server/cmd/pdp11d/ -args \
+    -cache /opt/pdp11/cache -work /tmp/pdstates [-systems bsd211,rsts]
+```
+
+`TestFsckRepair` in the same file damages a copy of the disk of `bsd211` and `bsd211-pl499`: an
+impossible inode after a pulled plug must be repaired without any help, up to `login:`; with a
+destroyed superblock the console must say "fsck cannot repair this disk" after one round and stay at
+the root shell, from which `shutdownOS` must work.

@@ -562,7 +562,7 @@ func TestLimiterKeys(t *testing.T) {
 }
 
 // TestRemoteNamesTheClient: log lines name the client behind a trusted
-// proxy and never believe the header of anyone else (R21).
+// proxy and never believe the header of anyone else.
 func TestRemoteNamesTheClient(t *testing.T) {
 	e := newWebEnv(t, webCfg{opts: Options{TrustedProxies: []string{"10.0.0.0/8"}}})
 	for _, tt := range []struct{ remote, xff, want string }{

@@ -51,7 +51,7 @@ func TestConnectOrder(t *testing.T) {
 	if c := bsd["credentials"]; c == nil {
 		t.Fatal("credentials encoded as null")
 	}
-	// Wire names the UI relies on (R2): noLogin and bootTimeoutSec.
+	// Wire names the UI relies on: noLogin and bootTimeoutSec.
 	if bsd["noLogin"] != false || bsd["bootTimeoutSec"] != 90.0 || rt["noLogin"] != true || rt["bootTimeoutSec"] != 60.0 {
 		t.Fatalf("noLogin/bootTimeoutSec: bsd211 %v/%v, rt11 %v/%v", bsd["noLogin"], bsd["bootTimeoutSec"], rt["noLogin"], rt["bootTimeoutSec"])
 	}
@@ -855,6 +855,27 @@ func TestRunShutsDownGracefully(t *testing.T) {
 	}
 }
 
+// A warning of the system manager reaches everyone as a toast with the
+// request's req, not as progress of the install.
+func TestProgressWarningBecomesAToast(t *testing.T) {
+	e := newWebEnv(t, webCfg{})
+	a := e.dial("sub=", nil)
+	a.skipInit(0)
+	b := e.dial("sub=", nil)
+	b.skipInit(0)
+	e.sys.Progress(api.Progress{Task: "install", ID: "bsd211", Phase: "warning", Text: "one disk is back", Req: "r1"})
+	e.sys.Progress(api.Progress{Task: "install", ID: "bsd211", Phase: "done", Pct: 100, Text: "installed"})
+	for _, w := range []*wsClient{a, b} {
+		m := w.await("toast", nil).json()
+		if m["level"] != "warn" || m["text"] != "one disk is back" || m["req"] != "r1" {
+			t.Fatalf("toast %v", m)
+		}
+		if p := w.await("progress", nil).json(); p["phase"] != "done" {
+			t.Fatalf("progress %v", p)
+		}
+	}
+}
+
 func TestToastsFromThePanelGoToEveryone(t *testing.T) {
 	e := newWebEnv(t, webCfg{})
 	e.m.SetReady(true) // not booting: the script starts at once
@@ -1011,4 +1032,65 @@ func TestSelectRefusedWhileSimulatorRuns(t *testing.T) {
 	e.sys.SetSelectErr(nil)
 	w.send(map[string]any{"type": "selectSystem", "id": "rt11"})
 	w.await("systems", func(m rx) bool { return m.json()["selected"] == "rt11" })
+}
+
+// TestReportedFailureGetsNoToast: a failed task told everyone with its "error"
+// progress; a failure before the task started still goes to the sender.
+func TestReportedFailureGetsNoToast(t *testing.T) {
+	e := newWebEnv(t, webCfg{key: "off"})
+	w := e.dial("sub=", nil)
+	w.skipInit(0)
+	reported := fmt.Errorf("disk full: %w", api.ErrReported)
+	failing := func(ctx context.Context, id, req string) error {
+		e.sys.Progress(api.Progress{Task: "x", ID: id, Phase: "error", Text: "disk full", Req: req})
+		return reported
+	}
+	e.sys.SetInstallFunc(func(ctx context.Context, id string, accept bool, req string) error { return failing(ctx, id, req) })
+	e.sys.SetFactoryResetFunc(failing)
+	for _, task := range []string{"install", "factoryReset"} {
+		w.send(map[string]any{"type": task, "id": "bsd211", "acceptLicense": true, "req": task})
+		w.await("progress", func(m rx) bool { return m.json()["phase"] == "error" && m.json()["req"] == task })
+		for _, m := range w.drain(300 * time.Millisecond) {
+			if m.msgType() == "toast" {
+				t.Fatalf("%s: toast %s", task, m.data)
+			}
+		}
+	}
+	e.sys.SetInstallFunc(func(ctx context.Context, id string, accept bool, req string) error {
+		return errors.New("licence missing")
+	})
+	w.send(map[string]any{"type": "install", "id": "bsd211", "req": "early"})
+	if tm := w.toast("licence missing"); tm["req"] != "early" || tm["level"] != "error" {
+		t.Fatalf("toast %v", tm)
+	}
+}
+
+// TestSystemSwitchClearsTheConsole: choosing another system empties the history
+// and resets the terminals; choosing the selected one again changes nothing.
+func TestSystemSwitchClearsTheConsole(t *testing.T) {
+	e := newWebEnv(t, webCfg{key: "off"})
+	e.m.Stream().EmitString("old system\r\n")
+	w := e.dial("sub=console", nil)
+	w.skipInit(1)
+	w.send(map[string]any{"type": "selectSystem", "id": "bsd211"})
+	for _, m := range w.drain(200 * time.Millisecond) {
+		if m.msgType() == "#console" {
+			t.Fatalf("selecting the selected system sent %q", m.data)
+		}
+	}
+	w.send(map[string]any{"type": "selectSystem", "id": "rt11"})
+	if m := w.await("#console", nil); string(m.data[1:]) != "\x1bc" {
+		t.Fatalf("console message %q", m.data)
+	}
+	w.await("systems", func(m rx) bool { return m.json()["selected"] == "rt11" })
+	late := e.dial("sub=console", nil)
+	var first []byte
+	for _, m := range late.drain(300 * time.Millisecond) {
+		if m.msgType() == "#console" && first == nil {
+			first = m.data
+		}
+	}
+	if string(first) != "\x10" {
+		t.Fatalf("history for a new viewer %q", first)
+	}
 }

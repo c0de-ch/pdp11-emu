@@ -1,7 +1,36 @@
 // Modal dialogs on top of <dialog> (focus trap, Esc, inert background),
 // plus the standard confirmations of UI.md §2.
 
-import { h } from '../util.js';
+import { h, restoreFocus } from '../util.js';
+
+/**
+ * Says when a scroller has more below its fold: a fade over its lower edge
+ * and a "More below" button that pages down. Only for the pointer; the
+ * keyboard scrolls by moving the focus or with Page Down.
+ */
+export function scrollHint(scroller, host) {
+  const smooth = () => (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth');
+  const hint = h('button', {
+    type: 'button', class: 'scroll-hint', tabindex: -1, 'aria-hidden': 'true', hidden: true,
+    onmousedown: (e) => e.preventDefault(), // the focus stays where it is
+    onclick: () => scroller.scrollBy({ top: scroller.clientHeight * 0.8, behavior: smooth() }),
+  }, h('span', {}, 'More below ↓'));
+  const update = () => {
+    hint.hidden = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8;
+  };
+  scroller.addEventListener('scroll', update, { passive: true });
+  const ro = new ResizeObserver(update);
+  ro.observe(scroller);
+  // the content changes size without the scroller doing so
+  const mo = new MutationObserver(update);
+  mo.observe(scroller, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class', 'open'] });
+  host.append(hint);
+  update();
+  return () => {
+    ro.disconnect();
+    mo.disconnect();
+  };
+}
 
 /**
  * Opens a modal dialog and resolves with the value of the action chosen
@@ -14,21 +43,26 @@ import { h } from '../util.js';
  * @param {string} [o.dismiss]  value for Esc (default 'cancel')
  * @param {string} [o.focus]    value of the action that gets the focus (default: the primary one, else the first)
  * @param {string} [o.className]
+ * @param {string} [o.note]     short text beside the action buttons
  * @param {(dlg: HTMLDialogElement, close: (v: string) => void) => void} [o.onOpen]
  * @returns {{ promise: Promise<string>, dialog: HTMLDialogElement, close: (v: string) => void }}
  */
-export function openDialog({ title, body, actions = [], dismiss = 'cancel', focus, className = '', onOpen } = {}) {
+export function openDialog({ title, body, actions = [], dismiss = 'cancel', focus, className = '', note, onOpen } = {}) {
   const prevFocus = document.activeElement;
+  // over another dialog (the chooser): that one is dimmed already
+  const nested = !!document.querySelector('dialog.dialog[open]');
   let resolve;
   const promise = new Promise((r) => { resolve = r; });
   const titleId = `dlg-${Math.random().toString(36).slice(2)}`;
-  const dlg = h('dialog', { class: `dialog ${className}`, 'aria-labelledby': titleId });
+  const dlg = h('dialog', { class: `dialog ${className}${nested ? ' nested' : ''}`, 'aria-labelledby': titleId });
+  let stopHint = null;
   const close = (v) => {
     if (!dlg.open) return;
+    stopHint?.();
     dlg.close();
     dlg.remove();
     resolve(v);
-    if (prevFocus && document.contains(prevFocus)) prevFocus.focus?.({ preventScroll: true });
+    restoreFocus(prevFocus);
   };
   const header = h('header', { class: 'dialog-head' },
     h('h2', { id: titleId }, title),
@@ -36,9 +70,11 @@ export function openDialog({ title, body, actions = [], dismiss = 'cancel', focu
   );
   const content = h('div', { class: 'dialog-body' });
   if (body !== undefined && body !== null) content.append(...[body].flat());
-  dlg.append(header, content);
+  const contentBox = h('div', { class: 'dialog-scroll' }, content);
+  dlg.append(header, contentBox);
   if (actions.length) {
     const foot = h('footer', { class: 'dialog-actions' });
+    if (note) foot.append(h('p', { class: 'dialog-note muted' }, note));
     for (const a of actions) {
       foot.append(h('button', {
         type: 'button', class: `btn ${a.kind ? `btn-${a.kind}` : ''}`, disabled: !!a.disabled,
@@ -53,6 +89,7 @@ export function openDialog({ title, body, actions = [], dismiss = 'cancel', focu
   });
   document.body.append(dlg);
   dlg.showModal();
+  stopHint = scrollHint(content, contentBox);
   const first = (focus && dlg.querySelector(`.dialog-actions [data-value="${CSS.escape(focus)}"]:not([disabled])`))
     ?? dlg.querySelector('.dialog-actions .btn-primary:not([disabled])') ?? dlg.querySelector('.dialog-actions .btn:not([disabled])');
   first?.focus();
@@ -71,6 +108,12 @@ export function confirmDialog({ title, text, ok = 'OK', cancel = 'Cancel', dange
     ],
   }).promise.then((v) => v === 'ok');
 }
+
+// What pulling the plug risks. A system that can shut itself down keeps data
+// in memory and marks its disks in use; one without a shutdown (RT-11) writes
+// everything at once, so only a program that is writing at that moment suffers.
+const PLUG_RISK = 'Turning it off without a clean shutdown is like pulling the plug: the disks may need repair at the next boot, and recent changes can be lost.';
+const NO_SHUTDOWN_RISK = 'Switching off while a program writes to a disk can damage its files.';
 
 /**
  * The OS is halted but still in memory: it reached its prompt and the CPU
@@ -100,10 +143,11 @@ export function confirmStop({ what, system, state }) {
     const locked = state.controls?.key === 'lock';
     const how = `${locked ? 'turn the key to POWER, ' : ''}set ENABLE/HALT to ENABLE and press CONT`;
     const body = [
-      h('p', {}, `${name} is still in memory: the CPU was halted, not shut down. Turning it off now is like pulling the plug: the disks may need repair at the next boot, and recent changes can be lost.`),
-      h('p', {}, system?.canShutdown ? `To shut it down cleanly, ${how}, then use Shut down OS.` : `To stop it cleanly, ${how} and do what it needs on the console first.`),
+      h('p', {}, `${name} is still in memory: the CPU was halted, not shut down. ${system?.canShutdown ? PLUG_RISK : NO_SHUTDOWN_RISK}`),
+      h('p', {}, system?.canShutdown ? `To shut it down cleanly, ${how}, then use Shut down OS.` : `To stop it cleanly, ${how}, then do what it needs on the console.`),
     ];
-    if (system?.shutdown) body.push(h('div', { class: 'shutdown-text' }, h('strong', {}, system.canShutdown ? 'Clean shutdown: ' : 'Before you switch off: '), system.shutdown));
+    // with a clean shutdown the button does it all; otherwise the system's own advice
+    if (system?.shutdown && !system.canShutdown) body.push(h('div', { class: 'shutdown-text' }, h('strong', {}, 'Before you switch off: '), system.shutdown));
     const actions = [
       { label: 'Cancel', value: 'cancel' },
       { label: 'Pull the plug', value: 'plug', kind: 'danger' },
@@ -121,7 +165,7 @@ export function confirmStop({ what, system, state }) {
   if (!system?.canShutdown) {
     const body = [h('p', {}, `${name} is running and has no automatic shutdown: do what it needs on the console first, then pull the plug.`)];
     if (system?.shutdown) body.push(h('div', { class: 'shutdown-text' }, h('strong', {}, 'Before you switch off: '), system.shutdown));
-    else body.push(h('p', {}, 'Switching off while a program writes to a disk can damage its files.'));
+    else body.push(h('p', {}, NO_SHUTDOWN_RISK));
     return openDialog({
       title: what,
       body,
@@ -132,16 +176,16 @@ export function confirmStop({ what, system, state }) {
     }).promise;
   }
   const body = [
-    h('p', {}, `${name} is running. Turning it off without a clean shutdown is like pulling the plug: the disks may need repair at the next boot, and recent changes can be lost.`),
+    h('p', {}, `${name} is running. ${PLUG_RISK}`),
   ];
-  if (system.shutdown) body.push(h('div', { class: 'shutdown-text' }, h('strong', {}, 'Clean shutdown: '), system.shutdown));
+  if (system.shutdown) body.push(h('div', { class: 'shutdown-text' }, h('strong', {}, 'Clean shutdown (recommended): '), system.shutdown));
   return openDialog({
     title: what,
     body,
     actions: [
       { label: 'Cancel', value: 'cancel' },
       { label: 'Pull the plug', value: 'plug', kind: 'danger' },
-      { label: 'Shut down the OS first (recommended)', value: 'shutdown', kind: 'primary' },
+      { label: 'Shut down the OS first', value: 'shutdown', kind: 'primary' },
     ],
   }).promise;
 }

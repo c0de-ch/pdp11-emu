@@ -9,10 +9,9 @@ Outputs (committed, so this only needs to run when a font changes):
   web/assets/fonts/archivo-panel-500.woff2 switch-register tile numbers: Archivo wght 500 / wdth 85, digits only
   web/assets/fonts/LICENSE-*.txt           the fonts' licence texts (Montserrat Alternates: its
                                            outlines are used as artwork in geometry.json)
-  web/dev/panel-art.json                   bezel tagline and "digital" logo letters as SVG path
-                                           data in panel millimetres (Montserrat Alternates
-                                           outlines, OFL); merged into geometry.json by
-                                           gen-geometry.mjs
+  web/dev/panel-art.json                   bezel tagline as SVG path data in panel millimetres
+                                           (Montserrat Alternates outlines, OFL) and the labels'
+                                           metrics; merged into geometry.json by gen-geometry.mjs
 
 Requirements: Python 3.9+, fontTools and brotli (pip install fonttools brotli).
 
@@ -272,28 +271,19 @@ def pair_kerning(font):
 
 
 def build_art(src, panel_metrics):
-    """Bezel branding, positioned in the r4 element-table frame (mm):
-    tagline ink x 65.2..279.4, baseline 9.9, x-height 3.8 mm; the seven
-    "digital" boxes start at x 15.9 with pitch 6.63 mm, letters on baseline 10.7."""
+    """Bezel tagline, positioned in the r4 element-table frame (mm): ink x 65.2..279.4,
+    baseline 9.9, x-height 3.8 mm. The "digital" logo's letters are not from a font
+    (its double-storey g and a are in none used here): gen-geometry.mjs draws them."""
     font = TTFont(os.path.join(src, "MontserratAlternates-Regular.ttf"))
     upm = font["head"].unitsPerEm
     xh = font["OS/2"].sxHeight / upm
     tag_d, tag_box = text_path(font, "digital equipment corporation • maynard, massachusetts",
                                -0.012, 65.2, 9.9, 3.8 / xh, fit_width=214.2)
-    letters = []
-    for i, ch in enumerate("digital"):
-        bx = 15.9 + i * 6.63
-        d, box = text_path(font, ch, 0, 0, 10.7, 5.0 / xh)
-        w = box["x1"] - box["x0"]
-        # centre the letter's ink in its 6.1 mm box
-        letters.append({"ch": ch, "dx": round(bx + 3.05 - w / 2, 3), "d": d})
     art = {
         "source": "Montserrat Alternates Regular (OFL), outlines converted by web/dev/build-fonts.py",
         "labelCapHeight": panel_metrics["capHeight"],
         "labelMetrics": panel_metrics["labels"],
         "tagline": {"d": tag_d, "x0": round(tag_box["x0"], 2), "x1": round(tag_box["x1"], 2)},
-        "digital": {"boxes": [{"x": round(15.9 + i * 6.63, 2), "y": 0.6, "w": 6.1, "h": 12.6} for i in range(7)],
-                    "letters": letters},
     }
     with open(ART_OUT, "w", encoding="utf-8") as f:
         json.dump(art, f, indent=1)

@@ -112,6 +112,9 @@ type Stream interface {
 	Queued() int
 	// CancelInput drops queued input.
 	CancelInput()
+	// Reset forgets the recorded output and sends subscribers the terminal
+	// reset ESC c, so everyone continues with an empty console.
+	Reset()
 }
 
 // PowerOnOptions control Machine.PowerOn.
@@ -132,6 +135,9 @@ var (
 	ErrNotHalted  = errors.New("CPU is not halted")
 	ErrBusy       = errors.New("machine is busy")
 	ErrNoSystem   = errors.New("selected system is not installed")
+	// ErrReported marks an install or factory reset whose failure every
+	// client got as a "progress" message: no further toast for it.
+	ErrReported = errors.New("reported by the task's progress")
 	// ErrAddress wraps SimH's "Address space exceeded", "Relocation error"
 	// and "Invalid argument" replies to EXAMINE/DEPOSIT (non-existent
 	// memory, I/O-page hole, MMU abort, bad address).
@@ -270,14 +276,27 @@ type PanelSource interface {
 
 // Progress reports a long-running task.
 type Progress struct {
-	Task  string  `json:"task"`  // install | factoryReset | shutdown
-	ID    string  `json:"id"`    // system id
-	Phase string  `json:"phase"` // download | verify | extract | step | done | error | cancelled
+	Task string `json:"task"` // install | factoryReset | shutdown
+	ID   string `json:"id"`   // system id
+	// download | verify | extract | step | done | error | cancelled; or
+	// warning, a note for the users that web turns into a toast.
+	Phase string  `json:"phase"`
 	Pct   float64 `json:"pct"`
 	Bytes int64   `json:"bytes"`
 	Total int64   `json:"total"`
 	Text  string  `json:"text"`
 	Req   string  `json:"req,omitempty"` // client correlation id, if any
+	// Failure explains a final "error" phase of an install or factory reset.
+	Failure *TaskFailure `json:"failure,omitempty"`
+}
+
+// TaskFailure says why the last install or factory reset of a system failed,
+// in the terms of the person who asked for it.
+type TaskFailure struct {
+	Task    string `json:"task"`    // install | factoryReset
+	Summary string `json:"summary"` // what happened, one sentence
+	Hint    string `json:"hint"`    // what to do: inline markdown (code, links)
+	Detail  string `json:"detail"`  // the error itself, for a bug report
 }
 
 // LicenseInfo is the licence shown before installing a system.
@@ -304,15 +323,19 @@ type ConsoleKeys struct {
 
 // SystemInfo is one entry of the systems list (see docs/PROTOCOL.md).
 type SystemInfo struct {
-	ID            string       `json:"id"`
-	Name          string       `json:"name"`
-	Short         string       `json:"short"`
-	Category      string       `json:"category"`
-	Description   string       `json:"description"`
-	Order         int          `json:"order"`
-	Default       bool         `json:"default"`
-	Installed     bool         `json:"installed"`
-	Installing    bool         `json:"installing"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Short       string `json:"short"`
+	Category    string `json:"category"`
+	Description string `json:"description"`
+	Order       int    `json:"order"`
+	Default     bool   `json:"default"`
+	Installed   bool   `json:"installed"`
+	Installing  bool   `json:"installing"`
+	// Task is what Installing is about: install | factoryReset ("" when no
+	// task runs). Failure is why the last one failed, until the next one starts.
+	Task          string       `json:"task,omitempty"`
+	Failure       *TaskFailure `json:"failure,omitempty"`
 	DownloadBytes int64        `json:"downloadBytes"`
 	DiskBytes     int64        `json:"diskBytes"`
 	License       LicenseInfo  `json:"license"`
@@ -366,11 +389,19 @@ type Systems interface {
 	ShutdownScript(id string) []ScriptStep
 }
 
-// ScriptStep waits for Expect (if set) on the console, then types Send.
+// ScriptStep waits for Expect (if set) on the console, then types Send
+// (docs/DESIGN.md §7). With IfLineEnds it runs only if the console output ends
+// in one of those texts; otherwise it is skipped or, with Else, the script
+// fails with that text, as it does when a wait of this step times out.
+// ExpectAny waits for the first of several texts and leaves what it saw for
+// the next step's wait.
 type ScriptStep struct {
-	Expect     string `json:"expect,omitempty"`
-	Send       string `json:"send,omitempty"`
-	TimeoutSec int    `json:"timeoutSec,omitempty"` // default 30
+	IfLineEnds []string `json:"ifLineEnds,omitempty"`
+	Expect     string   `json:"expect,omitempty"`
+	ExpectAny  []string `json:"expectAny,omitempty"`
+	Send       string   `json:"send,omitempty"`
+	Else       string   `json:"else,omitempty"`
+	TimeoutSec int      `json:"timeoutSec,omitempty"` // default 30
 }
 
 // LogBuffer holds recent simulator output lines (the only source of the

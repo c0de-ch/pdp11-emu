@@ -3,7 +3,7 @@
 // (docs/UI.md §5, docs/PROTOCOL.md §1.4).
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { closeBrowser, mock, openPage, skip, sleep, waitFor } from './helpers.mjs';
+import { closeBrowser, mock, newContext, openPage, skip, sleep, waitFor } from './helpers.mjs';
 
 const text = (page) => page.evaluate(() => window.pdp11Debug.consoleText());
 const binary = (srv, client) => srv.received.filter((r) => r.binary === 0x10 && (client === undefined || r.client === client));
@@ -37,7 +37,7 @@ describe('console', { skip }, () => {
     await closeBrowser();
   });
 
-  test('uses Glass TTY VT220 at an integer multiple of 20 px when it fits', async () => {
+  test('at 1920x1080 the console uses Glass TTY VT220 at 20 px, on the pixel grid', async () => {
     const f = await page.evaluate(() => {
       const r = document.querySelector('.console-screen .xterm-screen').getBoundingClientRect();
       return { font: window.pdp11Debug.consoleFont(), w: r.width, h: r.height };
@@ -47,6 +47,23 @@ describe('console', { skip }, () => {
     const k = f.font.size / 20;
     assert.equal(Math.round(f.h), 480 * k, 'rows are exactly 20 px per scale step');
     assert.equal(Math.round(f.w), 800 * k);
+  });
+
+  test('the text glow takes the colour of the text: inverse video keeps sharp dark letters, dim text stays dim', async () => {
+    const shadow = () => page.evaluate(async () => {
+      await new Promise((r) => window.pdp11Debug.app.console.term.write('\x1b[7mINVERSE\x1b[0m \x1b[2mDIM\x1b[0m\r\n', r));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const spans = [...document.querySelectorAll('.xterm-rows span')];
+      const look = (t) => {
+        const cs = getComputedStyle(spans.findLast((e) => e.textContent.includes(t)));
+        return { color: cs.color, shadow: cs.textShadow };
+      };
+      return { inverse: look('INVERSE'), dim: look('DIM'), row: getComputedStyle(document.querySelector('.xterm-rows')).color };
+    });
+    const r = await shadow();
+    assert.ok(r.inverse.shadow.includes(r.inverse.color), `inverse: ${JSON.stringify(r.inverse)}`);
+    assert.ok(!r.inverse.shadow.includes(r.row), `inverse: no phosphor glow over its letters ${JSON.stringify(r)}`);
+    assert.ok(r.dim.shadow.includes(r.dim.color), `dim: ${JSON.stringify(r.dim)}`);
   });
 
   test('typed keys go to the guest and its output appears', async () => {
@@ -128,7 +145,7 @@ describe('console', { skip }, () => {
   test('the send-key menu sends control characters and leaves the focus in the terminal', async () => {
     await page.click('.console-screen');
     await page.click('.console-head button:has-text("Send key")');
-    assert.deepEqual(await page.locator('.menu .menu-item').allTextContents(), ['^C', '^O', '^Q', '^S', '^T', '^U', '^W', '^Z', 'DEL', 'ESC']);
+    assert.deepEqual(await page.locator('.menu .menu-item .key').allTextContents(), ['^C', '^O', '^Q', '^S', '^T', '^U', '^W', '^Z', 'DEL', 'ESC']);
     await page.click('.menu .menu-item:has-text("^Z")');
     await waitFor(() => binary(srv).at(-1)?.text === '\x1a', { message: '^Z sent' });
     // the next keys go to the PDP-11, not to the menu button
@@ -174,6 +191,54 @@ describe('console', { skip }, () => {
     await page.evaluate(() => window.pdp11Debug.app.prefs.set('screenReader', false));
     await waitFor(async () => (await page.locator('.xterm-accessibility-tree').count()) === 0, { message: 'tree removed' });
     await page.click('.console-screen');
+  });
+
+  test('screen reader mode comes up as it was left, on or off', async () => {
+    for (const on of [true, false]) {
+      const ctx = await newContext({ viewport: { width: 1366, height: 768 } });
+      await ctx.addInitScript((v) => localStorage.setItem('pdp11-ui-prefs', JSON.stringify({ screenReader: v })), on);
+      const p = await openPage(srv, { context: ctx });
+      try {
+        assert.equal(await p.evaluate(() => window.pdp11Debug.app.console.term.options.screenReaderMode), on);
+        assert.equal(await p.locator('.xterm-accessibility-tree').count(), on ? 1 : 0);
+        assert.deepEqual(p.errors, []);
+      } finally {
+        await ctx.close();
+      }
+    }
+  });
+
+  test('a paste stays within the queue window while the state lags behind what was sent', async () => {
+    const p = await openPage(srv, { width: 1600, height: 900 });
+    const WINDOW = 8192;
+    try {
+      const sent = await p.evaluate(async () => {
+        const con = window.pdp11Debug.app.console;
+        const real = con.sendInputRaw;
+        let total = 0;
+        con.sendInputRaw = (bytes) => { total += bytes.length; return true; };
+        con.pasteText('x'.repeat(30000));
+        const first = total;
+        // state messages from before the chunks arrived: the queue still looks empty
+        con.setServerQueued(0);
+        con.setServerQueued(0);
+        const lagging = total;
+        // once the lag is over an empty queue is believed: the paste goes on
+        await new Promise((r) => setTimeout(r, 700));
+        con.setServerQueued(0);
+        const later = total;
+        con.sendInputRaw = real;
+        con.paste = null;
+        con.pasteQueued = 0;
+        con.pasteSends = [];
+        return { first, lagging, later };
+      });
+      assert.equal(sent.first, WINDOW, 'one window at first');
+      assert.equal(sent.lagging, WINDOW, 'nothing more on stale state messages');
+      assert.ok(sent.later > WINDOW, `then the next window: ${sent.later}`);
+    } finally {
+      await p.ctx.close();
+    }
   });
 
   test('a bell flashes the console frame', async () => {

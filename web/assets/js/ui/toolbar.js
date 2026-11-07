@@ -9,7 +9,9 @@ import { THEMES } from '../prefs.js';
 const ICON = {
   power: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.6a8 8 0 1 0 11.4 0"/></svg>',
   gear: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg>',
-  popout: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="7.5" width="12" height="12" rx="1.5"/><path d="M10 4.5h9.5V14M19.5 4.5 11 13"/></svg>',
+  // a window with an arrow out of it, holding a row of lamps or a prompt
+  popPanel: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5.5H4.5A1.5 1.5 0 0 0 3 7v11.5A1.5 1.5 0 0 0 4.5 20H16a1.5 1.5 0 0 0 1.5-1.5V13"/><path d="M15 3.5h6v6M21 3.5 13 11.5"/><circle class="filled" cx="6.8" cy="15.5" r="1.2"/><circle class="filled" cx="10.3" cy="15.5" r="1.2"/><circle class="filled" cx="13.8" cy="15.5" r="1.2"/></svg>',
+  popConsole: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5.5H4.5A1.5 1.5 0 0 0 3 7v11.5A1.5 1.5 0 0 0 4.5 20H16a1.5 1.5 0 0 0 1.5-1.5V13"/><path d="M15 3.5h6v6M21 3.5 13 11.5"/><path d="m6 12.5 2.8 2.5L6 17.5M10.5 17.5h3.5"/></svg>',
   help: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.3a2.7 2.7 0 1 1 3.7 2.5c-.7.3-1.1.9-1.1 1.6v.6"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>',
 };
 
@@ -49,6 +51,7 @@ export class Toolbar {
     this.app = app;
     this.full = full;
     host.textContent = '';
+    host.classList.toggle('full', full);
     this.el = {};
     const E = this.el;
     host.append(h('span', { class: 'brand' }, 'PDP-11/70'));
@@ -77,7 +80,8 @@ export class Toolbar {
         next.focus();
         next.click();
       });
-      host.append(E.system, h('span', { class: 'sep' }), E.power, E.boot, E.shutdownWrap, h('span', { class: 'sep' }), E.speed);
+      // the break makes two rows on a phone (CSS): the machine, then the view
+      host.append(E.system, h('span', { class: 'sep' }), E.power, E.boot, E.shutdownWrap, h('span', { class: 'row-break' }), h('span', { class: 'sep' }), E.speed);
     }
     host.append(h('span', { class: 'spacer' }));
     // the pill changes about once a second (instruction rate): not a live
@@ -91,8 +95,8 @@ export class Toolbar {
     attachMenu(E.settings, () => this.settingsItems());
     host.append(E.settings);
     if (full) {
-      E.popPanel = h('button', { type: 'button', class: 'icon-btn pop-panel', title: 'Open the front panel in its own window', 'aria-label': 'Pop out the front panel', onclick: () => app.popOut('panel') }, icon('popout'), h('span', { class: 'label label-long' }, ' Panel'));
-      E.popConsole = h('button', { type: 'button', class: 'icon-btn pop-console', title: 'Open the console in its own window', 'aria-label': 'Pop out the console', onclick: () => app.popOut('console') }, icon('popout'), h('span', { class: 'label label-long' }, ' Console'));
+      E.popPanel = h('button', { type: 'button', class: 'icon-btn pop-panel', title: 'Open the front panel in its own window', 'aria-label': 'Pop out the front panel', onclick: () => app.popOut('panel') }, icon('popPanel'), h('span', { class: 'label label-long' }, ' Panel'));
+      E.popConsole = h('button', { type: 'button', class: 'icon-btn pop-console', title: 'Open the console in its own window', 'aria-label': 'Pop out the console', onclick: () => app.popOut('console') }, icon('popConsole'), h('span', { class: 'label label-long' }, ' Console'));
       host.append(E.popPanel, E.popConsole);
     }
     E.help = h('button', { type: 'button', class: 'icon-btn', title: 'Help', 'aria-label': 'Help', 'aria-haspopup': 'dialog', onclick: () => app.openHelp() }, icon('help'));

@@ -20,7 +20,7 @@ export class PanelInput {
    * @param {HTMLElement} o.layer  hit layer (absolutely positioned over the panel)
    * @param {object} o.geo         geometry.json
    * @param {object} o.model       FrontPanel: controls(), setSR(), setLatch(), press(), setKnob(), turnKey()
-   * @param {() => boolean} [o.keepFocus]  true: a click must not take the keyboard focus
+   * @param {(e: PointerEvent) => boolean} [o.keepFocus]  true: a click must not take the keyboard focus
    *        (e.g. the console has it); otherwise the clicked control is focused so
    *        that the panel shortcuts work
    */
@@ -208,7 +208,7 @@ export class PanelInput {
   onPointerDown(e) {
     const hit = e.target.closest('.hit');
     if (!hit || e.button > 0) return;
-    if (!this.keepFocus() && document.activeElement !== hit) {
+    if (!this.keepFocus(e) && document.activeElement !== hit) {
       if (hit.classList.contains('hit-paddle')) this.focusPaddle(this.paddleByName(hit.dataset.name).slot, { visible: false });
       else hit.focus({ preventScroll: true, focusVisible: false });
     }

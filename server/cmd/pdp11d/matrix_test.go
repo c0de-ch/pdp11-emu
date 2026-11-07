@@ -369,7 +369,7 @@ func (mx *matrix) start(t *testing.T, sys *catalog.System, dir string, cfg start
 func shutdownBudget(sys *catalog.System) time.Duration {
 	d := 15 * time.Second
 	for _, s := range sys.ShutdownScript {
-		if s.Expect != "" {
+		if s.Expect != "" || len(s.ExpectAny) > 0 {
 			to := s.TimeoutSec
 			if to <= 0 {
 				to = 30
@@ -453,10 +453,11 @@ func matrixTable(rs []result) string {
 // ---- pdp11d child process ---------------------------------------------------
 
 type daemon struct {
-	cmd   *exec.Cmd
-	start time.Time
-	done  chan struct{}
-	code  int
+	cmd     *exec.Cmd
+	start   time.Time
+	logPath string
+	done    chan struct{}
+	code    int
 }
 
 func startDaemon(env map[string]string, logPath string) (*daemon, error) {
@@ -470,7 +471,7 @@ func startDaemon(env map[string]string, logPath string) (*daemon, error) {
 	}
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	d := &daemon{cmd: cmd, start: time.Now(), done: make(chan struct{})}
+	d := &daemon{cmd: cmd, start: time.Now(), logPath: logPath, done: make(chan struct{})}
 	if err := cmd.Start(); err != nil {
 		logf.Close()
 		return nil, err

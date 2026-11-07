@@ -165,6 +165,18 @@ func serve(args []string, getenv func(string) string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pdp11d:", err)
 		return 2
 	}
+	// Like the settings loadConfig checks: a restart cannot help, and nothing
+	// has been written yet.
+	if err := web.CheckOptions(web.Options{AllowOrigins: cfg.AllowOrigins, Hosts: cfg.Hosts,
+		TrustedProxies: cfg.TrustedProxies, FrameAncestors: cfg.FrameAncestors}); err != nil {
+		fmt.Fprintln(stderr, "pdp11d:", err)
+		return 2
+	}
+	static, err := staticFS(cfg.Web)
+	if err != nil {
+		fmt.Fprintln(stderr, "pdp11d:", err)
+		return 2
+	}
 	log.Info("pdp11d starting", "version", version, "data", cfg.Data, "simulator", cfg.SIMH, "listen", cfg.Listen)
 	// Before anything writes into the data directory: a second pdp11d on
 	// it would kill this one's simulator as a stale one, or share its disks.
@@ -223,12 +235,6 @@ func serve(args []string, getenv func(string) string, stderr io.Writer) int {
 		Autostart: cfg.Autostart,
 		Logger:    log,
 	})
-	if err != nil {
-		log.Error("cannot start", "err", err)
-		machine.Close()
-		return 1
-	}
-	static, err := staticFS(cfg.Web)
 	if err != nil {
 		log.Error("cannot start", "err", err)
 		machine.Close()

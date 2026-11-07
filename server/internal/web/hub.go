@@ -324,6 +324,10 @@ type progressState struct {
 func finalPhase(p string) bool { return p == "done" || p == "error" || p == "cancelled" }
 
 func (r *progressRelay) publish(p api.Progress) {
+	if p.Phase == "warning" {
+		r.h.broadcast(toastMessage("warn", p.Text, p.Req))
+		return
+	}
 	key := p.Task + "\x00" + p.ID
 	now := time.Now()
 	r.mu.Lock()

@@ -1,15 +1,17 @@
 // Drop-down menus anchored to a button (settings, send key), with
 // keyboard navigation (arrows, Home/End, Esc) and click-outside to close.
 
-import { h } from '../util.js';
+import { h, restoreFocus } from '../util.js';
 
 /**
  * @param {HTMLElement} anchor
  * @param {() => Array<object>} items  built when opened: {title}, {sep}, or
- *        {label, onSelect, checked?: boolean, role?: 'menuitemradio'|'menuitemcheckbox', disabled?, keep?,
+ *        {label, hint?, onSelect, checked?: boolean, role?: 'menuitemradio'|'menuitemcheckbox', disabled?, keep?,
  *        refocus?: false (onSelect moves the focus itself: closing leaves it there)}
+ * @param {object} [o]
+ * @param {string} [o.className]  extra class of the menu
  */
-export function attachMenu(anchor, items) {
+export function attachMenu(anchor, items, { className = '' } = {}) {
   let menu = null;
   anchor.setAttribute('aria-haspopup', 'menu');
   anchor.setAttribute('aria-expanded', 'false');
@@ -20,14 +22,14 @@ export function attachMenu(anchor, items) {
     anchor.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', outside, true);
     window.removeEventListener('resize', onResize);
-    if (refocus) anchor.focus({ preventScroll: true });
+    if (refocus) restoreFocus(anchor);
   };
   const outside = (e) => {
     if (menu && !menu.contains(e.target) && !anchor.contains(e.target)) close(false);
   };
   const onResize = () => close(false);
   const open = () => {
-    menu = h('div', { class: 'menu', role: 'menu' });
+    menu = h('div', { class: `menu ${className}`, role: 'menu' });
     for (const it of items()) {
       if (it.title) menu.append(h('div', { class: 'menu-title', role: 'presentation' }, it.title));
       else if (it.sep) menu.append(h('div', { class: 'menu-sep', role: 'separator' }));
@@ -45,7 +47,7 @@ export function attachMenu(anchor, items) {
               close(it.refocus !== false);
             }
           },
-        }, it.label, it.hint ? h('span', { class: 'muted' }, it.hint) : null);
+        }, h('span', { class: 'key' }, it.label), it.hint ? h('span', { class: 'muted' }, it.hint) : null);
         menu.append(b);
       }
     }

@@ -52,7 +52,7 @@ describe('application', { skip }, () => {
         const overlap = !(r.panel.right <= r.console.left || r.console.right <= r.panel.left || r.panel.bottom <= r.console.top || r.console.bottom <= r.panel.top);
         assert.ok(!overlap, 'panel and console do not overlap');
         assert.ok(r.panel.width >= 0.45 * w, `panel at a useful size (${Math.round(r.panel.width)} px)`);
-        if (w >= 1920) assert.match(r.font.family, /Glass TTY/, 'integer-scaled Glass TTY');
+        assert.match(r.font.family, /Glass TTY/, 'one font at every size');
       } finally {
         await page.ctx.close();
       }
@@ -182,6 +182,22 @@ describe('application', { skip }, () => {
     }
   });
 
+  test('typing after a mouse click on the panel goes to the console, also when the console did not have the focus', async () => {
+    const page = await openPage(srv, { width: 1600, height: 900 });
+    try {
+      await page.click('.toolbar .seg button:has-text("Authentic")');
+      const box = await page.locator('.hit-paddle[data-name="SR3"]').boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height * 0.75);
+      const n = await page.evaluate(() => window.pdp11Debug.sent.length);
+      await page.keyboard.type('who', { delay: 10 });
+      const sent = await page.evaluate((k) => window.pdp11Debug.sent.slice(k), n);
+      assert.deepEqual(sent.map((e) => e.text ?? e.msg?.type), ['w', 'h', 'o'], JSON.stringify(sent));
+      assert.equal((await page.evaluate(() => window.pdp11Debug.state.controls.enableHalt)), 'enable', 'h did not halt the CPU');
+    } finally {
+      await page.ctx.close();
+    }
+  });
+
   test('pop out the panel: the main window shows "Bring back" until the pop-out closes', async () => {
     const page = await openPage(srv, { width: 1600, height: 900 });
     try {
@@ -235,7 +251,8 @@ describe('application', { skip }, () => {
       await page.click('.sys-card[data-id="unix-v7"] button[data-action="select"]');
       const confirm = page.locator('dialog.dialog[open]').last();
       await confirm.locator('[data-value="shutdown"]').waitFor();
-      assert.match(await confirm.textContent(), /Shut down the OS first \(recommended\)/);
+      assert.equal(await confirm.locator('[data-value="shutdown"]').textContent(), 'Shut down the OS first');
+      assert.match(await confirm.textContent(), /Clean shutdown \(recommended\): /);
       assert.match(await confirm.textContent(), /shutdown -h now/, "the system's shutdown text");
       await confirm.locator('[data-value="shutdown"]').click();
       await waitFor(() => received(srv, (m) => m.type === 'shutdownOS').length > 0, { message: 'shutdownOS sent' });
@@ -643,7 +660,15 @@ describe('first run and banners', { skip }, () => {
       assert.match(await page.textContent('dialog.dialog[open] h2'), /Install RSX-11M-PLUS/);
       await page.keyboard.press('Escape');
       await page.waitForSelector('dialog.dialog[open]', { state: 'detached' });
-      // declined: Boot asks again instead of doing nothing
+      // declined: the console area says so and how to go on
+      assert.match(await page.textContent('.overlay-card'), /RSX-11M\+ is not installed/);
+      await page.click('.overlay-card button:has-text("Licence and install")');
+      await page.waitForSelector('dialog.dialog[open] .licence-text');
+      await page.keyboard.press('Escape');
+      await page.click('.overlay-card button:has-text("Other systems")');
+      await page.waitForSelector('dialog.dialog[open] .sys-card');
+      await page.keyboard.press('Escape');
+      // and Boot asks again instead of doing nothing
       await page.click('.toolbar button:has-text("Boot")');
       await page.waitForSelector('dialog.dialog[open] .licence-text', { timeout: 5000 });
       await page.keyboard.press('Escape');
@@ -678,7 +703,7 @@ describe('dialogs, toasts, live regions, security headers', { skip }, () => {
         assert.deepEqual(d.actions, ['cancel', 'plug', 'resume']);
         assert.equal(d.focus, 'cancel', 'Cancel has the focus');
         await page.keyboard.press('Enter');
-        await page.waitForSelector('dialog.dialog[open] .shutdown-text', { state: 'detached' });
+        await waitFor(() => dialog().then((x) => !x?.actions.includes('plug')), { message: 'closed' });
         if (await page.locator('dialog.dialog[open]').count()) await page.keyboard.press('Escape'); // the chooser
       }
       assert.equal(await page.evaluate(() => window.pdp11Debug.state.run), 'halted', 'nothing happened');

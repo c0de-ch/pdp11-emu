@@ -20,6 +20,7 @@
 //   --boot-hang       boots never reach the system's prompt (boot-timeout toast)
 //   --boot-timeout N  every system's bootTimeoutSec (default: per system, 30-90 s)
 //   --legacy          omit noLogin and bootTimeoutSec from the systems list (older pdp11d)
+//   --catalog         the real catalog (systems/*/system.json) as the systems list, for its texts
 //   --no-autostart    key at POWER but not powered on at start (PDP11_AUTOSTART=false)
 //   --quiet           no request log
 //
@@ -31,12 +32,15 @@
 // {level,text}, POST /mock/version {version}, POST /mock/drop, POST /mock/query,
 // POST /mock/log {lines}, POST /mock/hang {hang}, POST /mock/query {seq} (a
 // terminal query, default DA), POST /mock/query-after-history, POST
-// /mock/refuse {n} (the next n WebSocket handshakes get HTTP 401), GET
+// /mock/refuse {n} (the next n WebSocket handshakes get HTTP 401), POST
+// /mock/install-fail {fail} (installs and factory resets fail like a download
+// without network, default true), GET
 // /mock/machine (includes statusRequests, the GET api/status count, and
 // guestInput, the last 256 KiB of console input the guest received).
 // Requires Node 20 and "ws" (npm install in web/dev).
 
 import { createServer } from 'node:http';
+import { readdirSync, readFileSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, extname, join, normalize, sep } from 'node:path';
@@ -99,7 +103,7 @@ function mockSystems() {
       license: { name: 'BSD and Caldera licence', class: 'redistributable', summary: 'Free to use and redistribute.', text: '' },
       credentials: [{ user: 'root', password: '' }, { user: 'user', password: '' }], bootTimeoutSec: 90,
       shutdown: 'Log in as root and type shutdown -h now; wait for "halting".', canShutdown: true, notes: NOTES_BSD,
-      console: { backspace: 'del', interrupt: 'ctrl-c', keyHelp: 'Backspace erases (DEL), Ctrl+C interrupts, Ctrl+U kills the line' },
+      console: { backspace: 'del', interrupt: 'ctrl-c', keyHelp: 'Backspace erases · Ctrl+U kills the line · Ctrl+C interrupts · Ctrl+Z suspends (csh) · Ctrl+D logs out' },
     }),
     sys({
       id: 'unix-v7', name: 'Research Unix V7', short: 'Unix V7', order: 20,
@@ -130,6 +134,37 @@ function mockSystems() {
       console: { backspace: 'del', interrupt: 'ctrl-c', keyHelp: 'Ctrl+C gets MCR>, Ctrl+U kills the line' },
     }),
   ];
+}
+
+/** The real catalog as SystemInfo entries (like systems.Manager), none installed. */
+function catalogSystems() {
+  const root = join(WEB, '..', 'systems');
+  const list = [];
+  for (const d of readdirSync(root, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    const s = JSON.parse(readFileSync(join(root, d.name, 'system.json'), 'utf8'));
+    list.push({
+      id: s.id, name: s.name, short: s.short, category: s.category, description: s.description, order: s.order, default: !!s.default,
+      installed: false, installing: false, notes: s.notes, speed: s.speed, console: s.console, shutdown: s.shutdown,
+      canShutdown: !!s.shutdownScript?.length, noLogin: !!s.noLogin, credentials: s.credentials ?? [], bootTimeoutSec: s.bootTimeoutSec ?? 120,
+      downloadBytes: s.artifacts.reduce((n, a) => n + a.size, 0),
+      diskBytes: s.artifacts.reduce((n, a) => n + a.files.reduce((m, f) => m + f.size, 0), 0),
+      license: { name: s.license.name, class: s.license.class, summary: s.license.summary, text: readFileSync(join(root, d.name, s.license.file), 'utf8') },
+    });
+  }
+  return list.sort((a, b) => a.order - b.order);
+}
+
+/** What systems.Manager says about a download without network. */
+function downloadFailure(task, sys) {
+  const file = `${sys.id}.tar.gz`;
+  const url = `https://downloads.example/archive/${file}`;
+  return {
+    task,
+    summary: 'The download server could not be reached (connection refused).',
+    hint: `Check that this machine can reach the internet and try again. Or download \`${file}\` (${(sys.downloadBytes / 1e6).toFixed(1)} MB) yourself from [${url}](${url}), put it in \`/var/lib/pdp11/import\` and try again: pdp11d looks there first.`,
+    detail: `cannot download ${file} (${sys.downloadBytes} bytes, sha256 ${'b3e6b8321e6e1ec2'.repeat(4)}); tried ${[1, 2, 3].map((n) => `${url} (attempt ${n}: Get "${url}": dial tcp 192.0.2.1:443: connect: connection refused)`).join('; ')} (you can also place the file in /var/lib/pdp11/import)`,
+  };
 }
 
 const BSD_BOOT = [
@@ -354,8 +389,9 @@ class Machine {
   constructor(opts, events) {
     this.opts = opts;
     this.ev = events; // { state(), systems(), toast(level, text), progress(p), console(bytes), log(line) }
-    this.systems = mockSystems();
-    if (opts.firstRun) this.systems[0].installed = false;
+    this.systems = opts.catalog ? catalogSystems() : mockSystems();
+    if (opts.catalog) this.sys('bsd211').installed = true;
+    if (opts.firstRun) this.sys('bsd211').installed = false;
     if (opts.bootTimeoutSec > 0) for (const x of this.systems) x.bootTimeoutSec = opts.bootTimeoutSec;
     this.selected = 'bsd211';
     if (opts.system && this.sys(opts.system)) {
@@ -451,6 +487,10 @@ class Machine {
         this.install(sys.id, false, '', () => {
           this.run = 'off';
           this.powerOn(boot);
+        }, (failure) => {
+          this.run = 'error';
+          this.error = `installing ${sys.name}: ${failure.detail}`;
+          this.changed();
         });
         this.run = 'starting';
         this.changed();
@@ -773,6 +813,7 @@ class Machine {
     if (!this.sys(id)) return `unknown system ${id}`;
     const guard = this.changeGuard();
     if (guard) return guard;
+    if (id !== this.selected) this.ev.clearConsole();
     this.selected = id;
     this.needsInstall = null;
     this.error = '';
@@ -786,7 +827,18 @@ class Machine {
     if (this.controls.key !== 'off' && ['off', 'error'].includes(this.run)) this.powerOn(!this.effectiveHalt());
   }
 
-  install(id, accept, req, then) {
+  /** The task's end as pdp11d reports a failure: the "error" progress, then the system's entry. */
+  taskFailed(task, sys, req, fail) {
+    const failure = downloadFailure(task, sys);
+    sys.installing = false;
+    sys.task = undefined;
+    sys.failure = failure;
+    this.ev.progress({ task, id: sys.id, phase: 'error', pct: 0, bytes: 0, total: 0, text: failure.detail, req, failure });
+    this.ev.systems();
+    fail?.(failure);
+  }
+
+  install(id, accept, req, then, fail) {
     const sys = this.sys(id);
     if (!sys) return `unknown system ${id}`;
     if (sys.installed) {
@@ -796,6 +848,8 @@ class Machine {
     if (sys.license.class !== 'redistributable' && !accept) return `${sys.name}: the licence must be accepted (acceptLicense)`;
     if (this.installs.has(id)) return `${sys.name} is already being installed`;
     sys.installing = true;
+    sys.task = 'install';
+    sys.failure = undefined;
     this.ev.systems();
     const total = sys.downloadBytes;
     const job = { cancelled: false, timer: 0 };
@@ -806,7 +860,14 @@ class Machine {
     const tick = () => {
       if (job.cancelled) return;
       const t = Date.now() - start;
-      if (t < DL) {
+      if (this.installFail && t >= Math.min(DL / 2, 500)) {
+        this.installs.delete(id);
+        this.taskFailed('install', sys, req, fail);
+        return;
+      }
+      if (this.installFail) {
+        send('download', 0, 0, 'Attempt 1 of 3 failed (connection refused); trying again in 2 s…');
+      } else if (t < DL) {
         const f = t / DL;
         send('download', Math.round(f * 900) / 10, Math.round(total * f));
       } else if (t < DL + 600) {
@@ -816,6 +877,7 @@ class Machine {
       } else {
         this.installs.delete(id);
         sys.installing = false;
+        sys.task = undefined;
         sys.installed = true;
         send('done', 100, total);
         this.ev.systems();
@@ -837,6 +899,8 @@ class Machine {
     this.installs.delete(id);
     const sys = this.sys(id);
     sys.installing = false;
+    sys.task = undefined;
+    if (job.reset) sys.installed = true; // as pdp11d: a cancelled reset leaves the old images
     if (this.run === 'starting') {
       this.run = 'off';
       this.changed();
@@ -848,23 +912,34 @@ class Machine {
 
   factoryReset(id, req) {
     const sys = this.sys(id);
-    if (!sys || id !== this.selected) return 'factory reset works on the selected system';
-    const guard = this.changeGuard();
+    if (!sys) return `unknown system ${id}`;
+    // like pdp11d: only the selected system can run
+    const guard = id === this.selected ? this.changeGuard() : '';
     if (guard) return guard;
     if (!sys.installed) return `${sys.name} is not installed`;
     // as pdp11d: installing, and not installed, while the task runs
     sys.installing = true;
+    sys.task = 'factoryReset';
+    sys.failure = undefined;
     sys.installed = false;
     this.ev.systems();
     this.ev.progress({ task: 'factoryReset', id, phase: 'extract', pct: 50, bytes: 0, total: 0, text: '', req });
-    setTimeout(() => {
+    const job = { cancelled: false, timer: 0, reset: true };
+    this.installs.set(id, job);
+    job.timer = setTimeout(() => {
+      this.installs.delete(id);
       sys.installing = false;
+      sys.task = undefined;
       sys.installed = true;
+      if (this.installFail) {
+        this.taskFailed('factoryReset', sys, req);
+        return;
+      }
       // as pdp11d and install() above: "done" arrives first, with the first-run overlay still up
       this.ev.progress({ task: 'factoryReset', id, phase: 'done', pct: 100, bytes: 0, total: 0, text: '', req });
       this.ev.systems();
-      this.retryPower();
-    }, 800);
+      if (id === this.selected) this.retryPower();
+    }, this.opts.resetMs ?? 800);
     return '';
   }
 
@@ -1082,6 +1157,13 @@ export async function startMockServer(options = {}) {
     systems: () => everyone({ type: 'systems', ...systemsBody() }),
     toast: (level, text) => everyone({ type: 'toast', level, text }),
     progress: (p) => everyone({ type: 'progress', ...p }),
+    clearConsole: () => {
+      // like pdp11d's console Reset: the history starts over and the viewers' terminals too
+      history.length = 0;
+      historyBytes = 0;
+      const msg = Buffer.concat([Buffer.from([0x10]), Buffer.from('\x1bc', 'latin1')]);
+      for (const cl of subscribers('console')) send(cl, msg);
+    },
     console: (bytes) => {
       history.push(bytes);
       historyBytes += bytes.length;
@@ -1352,6 +1434,9 @@ export async function startMockServer(options = {}) {
       case 'hang':
         m.hang = body.hang !== false;
         return ok({ hang: m.hang });
+      case 'install-fail':
+        m.installFail = body.fail !== false;
+        return ok({ fail: m.installFail });
       case 'refuse':
         refuse = Number(body.n ?? 1);
         return ok({ refuse });
@@ -1473,6 +1558,7 @@ const USAGE = `usage: node web/dev/mock-server.mjs [options]
   --boot-hang       boots never reach the system's prompt (boot-timeout toast)
   --boot-timeout N  every system's bootTimeoutSec (default: per system, 30-90 s)
   --legacy          omit noLogin and bootTimeoutSec from the systems list (older pdp11d)
+  --catalog         the real catalog (systems/*/system.json) as the systems list, for its texts
   --no-autostart    key at POWER but not powered on at start (PDP11_AUTOSTART=false)
   --quiet           no request log`;
 
@@ -1494,6 +1580,7 @@ function parseArgs(argv) {
     else if (a === '--boot-hang') o.bootHang = true;
     else if (a === '--boot-timeout') o.bootTimeoutSec = Number(val());
     else if (a === '--legacy') o.legacy = true;
+    else if (a === '--catalog') o.catalog = true;
     else if (a === '--no-autostart') o.autostart = false;
     else if (a === '--quiet') o.quiet = true;
     else if (a === '--help' || a === '-h') {

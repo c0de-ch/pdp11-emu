@@ -317,3 +317,33 @@ func TestConsoleReconnect(t *testing.T) {
 		t.Fatalf("Write after detach: %v", err)
 	}
 }
+
+// TestConsoleReset: the history starts over and subscribers get the terminal
+// reset, in order with the output around it.
+func TestConsoleReset(t *testing.T) {
+	c := newConsole(testLogger(t), 0)
+	c.output([]byte("old system\r\n"))
+	var live bytes.Buffer
+	_, cancel := c.SubscribeHistory(func(p []byte) { live.Write(p) })
+	defer cancel()
+	c.output([]byte("more\r\n"))
+	c.Reset()
+	c.output([]byte("new system\r\n"))
+	if got, want := live.String(), "more\r\n\x1bcnew system\r\n"; got != want {
+		t.Fatalf("subscriber got %q, want %q", got, want)
+	}
+	h, cancel2 := c.SubscribeHistory(func([]byte) {})
+	cancel2()
+	if string(h) != "new system\r\n" {
+		t.Fatalf("history %q", h)
+	}
+	// also after the ring buffer wrapped
+	c.output(bytes.Repeat([]byte("x"), historySize+10))
+	c.Reset()
+	c.output([]byte("y"))
+	h, cancel3 := c.SubscribeHistory(func([]byte) {})
+	cancel3()
+	if string(h) != "y" {
+		t.Fatalf("history after a wrap: %d bytes", len(h))
+	}
+}

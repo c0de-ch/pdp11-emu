@@ -18,28 +18,21 @@
       "note": "no password"
     }
   ],
-  "shutdown": "V5 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you: it first types root, which logs in at login: and is harmless at a shell prompt; leave any program first.",
+  "shutdown": "V5 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you from the login: prompt or a shell prompt: it logs in as root, after logging out another user's idle shell. While a program uses the console it types nothing and says so: leave the program first.",
   "shutdownScript": [
-    {
-      "send": "root\r"
-    },
-    {
-      "expect": "# ",
-      "send": "sync\r"
-    },
-    {
-      "expect": "# ",
-      "send": "sync\r"
-    },
-    {
-      "expect": "# ",
-      "send": "sync\r"
-    },
-    {
-      "expect": "# "
-    }
+    {"ifLineEnds": ["\nlogin: *", "\nName: *", "\n# ", "\n% "], "else": "the console is not at a shell or login: prompt, so nothing was typed. A program may be using it, or a command may be half typed: leave the program (ed: q), or clear the line (@), press Return for a fresh prompt and try again."},
+    {"ifLineEnds": ["\n% "], "send": "\u0004"},
+    {"expectAny": ["login: ", "Name: ", "# "], "timeoutSec": 15, "else": "the user logged in on the console did not log out: log out by hand (Ctrl+D), then try again."},
+    {"ifLineEnds": ["\nlogin: ", "\nName: "], "send": "root\r"},
+    {"ifLineEnds": ["\nlogin: *", "\nName: *"], "send": "@root\r"},
+    {"expectAny": ["# ", "Password:"]},
+    {"ifLineEnds": ["# "], "else": "the console asks for a password the script does not know: log in as root by hand, then try again."},
+    {"expect": "# ", "send": "sync\r"},
+    {"expect": "# ", "send": "sync\r"},
+    {"expect": "# ", "send": "sync\r"},
+    {"expect": "# "}
   ],
-  "notes": "## Log in\n\nLog in as **root** (no password). **#** erases the last character and **@** kills the line (the console's Backspace key sends # for you), DEL interrupts (Ctrl+C sends DEL), Ctrl+D ends input; `\\#` and `\\@` type the characters themselves. Use `chdir` instead of `cd`.\n\n## Things to try\n\n* `ls -l /bin`, `ps`, `who`, `date` - the system of 1974-75.\n* Compile C: `chdir /tmp`, `cat > hello.c`, type `main() { printf(\"hello, world\\n\"); }`, press Ctrl+D, then `cc hello.c` and `a.out`.\n* `bas` is a BASIC interpreter; games in `/usr/games`: `chess`, `bj`, `moo`, `ttt`, `cubic`, `wump`.\n* The display register: the kernel copies the word at the address in the switch register into the DISPLAY REGISTER on every clock tick. Turn the DATA knob to DISPLAY REGISTER and set the switches to 055140 to watch the tick counter `lbolt`, or 055144 for the seconds (`nm /unix`).\n\n## Shut down\n\nThere is no shutdown or halt command: type `sync` three times, wait a few seconds and switch off.\n",
+  "notes": "## Log in\n\nLog in as **root** (no password). **#** erases the last character and **@** kills the line (the console's Backspace key sends # for you), DEL interrupts (Ctrl+C sends DEL), Ctrl+D ends input; `\\#` and `\\@` type the characters themselves. Use `chdir` instead of `cd`.\n\n## Things to try\n\n* `ls -l /bin`, `ps`, `who`, `date` - the system of 1974-75.\n* Compile C: `chdir /tmp`, `cat > hello.c`, type `main() { printf(\"hello, world\\n\"); }`, press Ctrl+D, then `cc hello.c` and `a.out`.\n* `bas` is a BASIC interpreter; games in `/usr/games`: `chess`, `bj`, `moo`, `ttt`, `cubic`, `wump`.\n* The display register: the kernel copies the word at the address in the switch register into the DISPLAY REGISTER on every clock tick. Turn the DATA knob to DISPLAY REGISTER and set the switches to 055140 to watch the tick counter `lbolt`, or 055144 for the seconds (`nm /unix`).\n\n## Shut down\n\nThere is no shutdown or halt command: type `sync` three times, wait a few seconds and switch off.\n\n**Shut down OS** does this for you. It starts from the `login:` prompt (a half-typed name is cleared), from a root shell, or from another user's shell, which it logs out first. It never types into a program: with `ed` open, a half-typed command or anything else but a prompt on the last line it stops at once and says what to do (a stop of the service or container then powers off uncleanly).\n",
   "cpu": {
     "memory": "1M"
   },

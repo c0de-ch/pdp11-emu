@@ -247,7 +247,7 @@ func TestFTPDownload(t *testing.T) {
 	a.URL, a.Mirrors = srv.url("/pub/pdp11/uv6swre.zip"), nil
 	dir := t.TempDir()
 	var last int64
-	if err := m.dl.download(context.Background(), a, dir, func(n int64) { last = n }); err != nil {
+	if err := m.dl.download(context.Background(), a, dir, func(n int64) { last = n }, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	checkDownloaded(t, dir, a.SHA256, body)
@@ -268,7 +268,7 @@ func TestFTPResumeAfterDroppedDataConnection(t *testing.T) {
 	a, _ := f.archive("v6")
 	a.URL, a.Mirrors = srv.url("/pub/pdp11/uv6swre.zip"), nil
 	dir := t.TempDir()
-	if err := m.dl.download(context.Background(), a, dir, func(int64) {}); err != nil {
+	if err := m.dl.download(context.Background(), a, dir, func(int64) {}, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	checkDownloaded(t, dir, a.SHA256, body)
@@ -284,7 +284,7 @@ func TestFTPWithoutREST(t *testing.T) {
 	a, _ := f.archive("v6")
 	a.URL, a.Mirrors = srv.url("/pub/pdp11/uv6swre.zip"), nil
 	dir := t.TempDir()
-	if err := m.dl.download(context.Background(), a, dir, func(int64) {}); err != nil {
+	if err := m.dl.download(context.Background(), a, dir, func(int64) {}, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	checkDownloaded(t, dir, a.SHA256, body) // started over, not appended
@@ -298,7 +298,7 @@ func TestFTPStall(t *testing.T) {
 	a.URL, a.Mirrors = srv.url("/pub/pdp11/uv6swre.zip"), nil
 	dir := t.TempDir()
 	start := time.Now()
-	if err := m.dl.download(context.Background(), a, dir, func(int64) {}); err != nil {
+	if err := m.dl.download(context.Background(), a, dir, func(int64) {}, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	if d := time.Since(start); d < m.dl.stall || d > 5*time.Second {
@@ -317,7 +317,7 @@ func TestFTPMissingFileTriesTheNextMirror(t *testing.T) {
 	a.URL = srv.url("/pub/missing/uv6swre.zip")
 	a.Mirrors = []string{srv.url("/pub/pdp11/uv6swre.zip")}
 	dir := t.TempDir()
-	if err := m.dl.download(context.Background(), a, dir, func(int64) {}); err != nil {
+	if err := m.dl.download(context.Background(), a, dir, func(int64) {}, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	checkDownloaded(t, dir, a.SHA256, body)
@@ -326,14 +326,14 @@ func TestFTPMissingFileTriesTheNextMirror(t *testing.T) {
 	}
 	// Only missing everywhere: the error names the reply and every URL.
 	a.Mirrors = []string{srv.url("/pub/gone/uv6swre.zip")}
-	err := m.dl.download(context.Background(), a, t.TempDir(), func(int64) {})
+	err := m.dl.download(context.Background(), a, t.TempDir(), func(int64) {}, func(string) {})
 	if err == nil || !strings.Contains(err.Error(), "550") || !strings.Contains(err.Error(), "/pub/gone/") || !strings.Contains(err.Error(), a.SHA256) {
 		t.Fatalf("error %v", err)
 	}
 	// An FTP failure falls through to an HTTPS mirror.
 	a.Mirrors = []string{httpsURL}
 	dir = t.TempDir()
-	if err := m.dl.download(context.Background(), a, dir, func(int64) {}); err != nil {
+	if err := m.dl.download(context.Background(), a, dir, func(int64) {}, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	checkDownloaded(t, dir, a.SHA256, body)
@@ -344,7 +344,7 @@ func TestFTPSizeMismatchAndLogin(t *testing.T) {
 	a, _ := f.archive("v6")
 	a.URL, a.Mirrors = srv.url("/pub/pdp11/uv6swre.zip"), nil
 	a.Size++
-	err := m.dl.download(context.Background(), a, t.TempDir(), func(int64) {})
+	err := m.dl.download(context.Background(), a, t.TempDir(), func(int64) {}, func(string) {})
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("the server has %d bytes", len(body))) {
 		t.Fatalf("error %v", err)
 	}
@@ -355,7 +355,7 @@ func TestFTPSizeMismatchAndLogin(t *testing.T) {
 	// is retried, it often means "too many users").
 	a.Size--
 	a.URL = "ftp://joe:secret@" + srv.ln.Addr().String() + "/pub/pdp11/uv6swre.zip"
-	err = m.dl.download(context.Background(), a, t.TempDir(), func(int64) {})
+	err = m.dl.download(context.Background(), a, t.TempDir(), func(int64) {}, func(string) {})
 	if err == nil || !strings.Contains(err.Error(), "530") || count(srv.commands(), "USER joe") != attemptsPerURL {
 		t.Fatalf("error %v, commands %q", err, srv.commands())
 	}
@@ -369,7 +369,7 @@ func TestFTPCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(200*time.Millisecond, cancel)
 	start := time.Now()
-	err := m.dl.download(ctx, a, t.TempDir(), func(int64) {})
+	err := m.dl.download(ctx, a, t.TempDir(), func(int64) {}, func(string) {})
 	if !errors.Is(err, context.Canceled) || time.Since(start) > 3*time.Second {
 		t.Fatalf("error %v after %v", err, time.Since(start))
 	}

@@ -16,8 +16,12 @@
   Static preview of the front panel for visual comparison with the reference
   photo (no server needed). Query parameters:
     w=1340          panel width in px
-    state=photo     lamps/paddles as in r4's bb_composite photo (default),
-          all       lamp test (every lamp lit),  dark  (all lamps off)
+    state=photo     lamps, paddles and knobs as in r4's bb_composite photo (default),
+          all       lamp test (every lamp lit),  dark  (all lamps off),
+          rest      no paddle moved, lamps dark,
+          up        every switch that rises is raised, lamps dark,
+          down      every switch that presses is pressed, lamps dark
+    hover=<name>    highlight a paddle as under the pointer (e.g. EXAM)
     overlay=<url>   overlay an image at 50 % opacity (e.g. the reference photo)
     photo=<url>     draw r4's BlinkenBone composite photo (pw = its width in px,
                     default 1340) under the panel in the panel's mm frame;
@@ -52,18 +56,28 @@
   window.panel = panel;
   const state = q.get('state') || 'photo';
   const frame = new Uint8Array(64);
+  const none = { LOAD_ADRS: false, EXAM: false, DEP: false, CONT: false, START: false };
+  const base = { sr: 0, enableHalt: 'enable', sinstSbus: 'inst', addrKnob: 1, dataKnob: 3, key: 'power', lampTest: false, pressed: none };
   if (state === 'photo') {
-    for (const i of [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 22, 24, 26, 28, 30, 32, 34, 37, 42, 44, 47, 51, 55, 60]) frame[i] = 255;
+    frame.fill(255);
     panel.setServerControls({
-      sr: (1 << 20) | (1 << 18) | (1 << 14) | (1 << 2), enableHalt: 'enable', sinstSbus: 'inst',
-      addrKnob: 1, dataKnob: 1, key: 'power', lampTest: false,
-      pressed: { LOAD_ADRS: false, EXAM: true, DEP: true, CONT: false, START: false },
+      ...base, sr: (1 << 20) | (1 << 18) | (1 << 14) | (1 << 2), pressed: { ...none, EXAM: true, DEP: true },
     });
   } else if (state === 'all') {
     frame.fill(255);
+    panel.setServerControls(base);
+  } else if (state === 'up') {
+    panel.setServerControls({ ...base, sr: 0o17777777, lampTest: true, pressed: { ...none, DEP: true } });
+  } else if (state === 'down') {
+    panel.setServerControls({
+      ...base, enableHalt: 'halt', sinstSbus: 'bus', pressed: { ...none, LOAD_ADRS: true, EXAM: true, CONT: true, START: true },
+    });
+  } else {
+    panel.setServerControls(base);
   }
   panel.setFrame(frame);
   if (q.get('branding') === '0') panel.setBranding(false);
+  if (q.get('hover')) panel.view.setHover(q.get('hover'), true);
   if (q.get('overlay')) {
     const img = document.createElement('img');
     img.id = 'overlay';

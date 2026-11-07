@@ -1,194 +1,316 @@
-// Builds the front-panel SVG from geometry.json (millimetres, r4 frame):
-// bezel, window, boxes, bars, cells, tiles, labels, logo, unlit lamp lenses,
-// plus the movable parts (paddles in three poses, knobs, key) that
-// controls.js animates. Lamps themselves are HTML layers (lamps.js).
+// Builds the front-panel SVG from geometry.json (millimetres, r4 frame): the
+// moulded bezel with its walls, pockets and shelf, the logo plate, the dark
+// panel with the printed sheet on it (boxes, bars, cells, tiles, labels, logo,
+// unlit lamp windows), plus the movable parts (paddles in three poses, knobs,
+// key) that controls.js animates. Lamps themselves are HTML layers (lamps.js).
+//
+// All shading is gradients and flat shapes, no filters: colours and shapes were
+// sampled from the BlinkenBone photo of a real panel. Its light comes from the
+// upper right: everything brightens towards the right of the panel, shadows
+// fall to the lower left and the walls on the right side are in shade.
 
-const NS = 'http://www.w3.org/2000/svg';
+import { s, f2, pts, poly, line, outline, rrect, cornersPath, mix, linear, radial, acrossX, acrossY, Defs, USER } from './art.js';
+import { paddle, paddleDefs } from './paddles.js';
 
-/** Creates an SVG element; attribute values that are null/undefined are skipped. */
-export function s(tag, attrs = {}, ...children) {
-  const e = document.createElementNS(NS, tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v !== null && v !== undefined) e.setAttribute(k, String(v));
-  }
-  for (const c of children.flat()) {
-    if (c !== null && c !== undefined && c !== false) e.append(c);
-  }
-  return e;
-}
+export { s };
 
-const f2 = (v) => Math.round(v * 100) / 100;
-const pts = (list) => list.map(([x, y]) => `${f2(x)},${f2(y)}`).join(' ');
+const BOTTOM = 223.75; // where the paddles end
 
-function rrect(x0, y0, x1, y1, r, attrs = {}) {
-  return s('rect', { x: f2(x0), y: f2(y0), width: f2(x1 - x0), height: f2(y1 - y0), rx: r || null, ...attrs });
-}
+// The left pocket's diagonal ridge: a point on it and its unit normal, pointing into the pocket.
+const ridgeX = 1.4;
+const ridgeY = 187.2;
+const NX = 0.921;
+const NY = 0.389;
 
-/** Rounded rectangle path with separate top and bottom corner radii. */
-function roundedPath(x0, y0, x1, y1, rt, rb) {
-  const a = (r, x, y) => (r ? `A${r},${r} 0 0 1 ${f2(x)},${f2(y)}` : `L${f2(x)},${f2(y)}`);
-  return `M${f2(x0)},${f2(y0 + rt)} ${a(rt, x0 + rt, y0)} L${f2(x1 - rt)},${f2(y0)} ${a(rt, x1, y0 + rt)} ` +
-    `L${f2(x1)},${f2(y1 - rb)} ${a(rb, x1 - rb, y1)} L${f2(x0 + rb)},${f2(y1)} ${a(rb, x0, y1 - rb)} Z`;
-}
-
-function linear(id, stops, { x1 = 0, y1 = 0, x2 = 0, y2 = 1, units } = {}) {
-  return s('linearGradient', { id, x1, y1, x2, y2, gradientUnits: units },
-    stops.map(([o, c, a]) => s('stop', { offset: o, 'stop-color': c, 'stop-opacity': a ?? null })));
-}
-
-function radial(id, stops, { cx = 0.5, cy = 0.5, r = 0.5, fx, fy, units } = {}) {
-  return s('radialGradient', { id, cx, cy, r, fx, fy, gradientUnits: units },
-    stops.map(([o, c, a]) => s('stop', { offset: o, 'stop-color': c, 'stop-opacity': a ?? null })));
-}
-
-// Paddle palettes: UI.md §3 tokens, shading sampled from r4's BlinkenBone photo.
-const PADDLE = {
-  rose: {
-    face: '#cf2647', faceTop: '#7a1428', faceHi: '#dd3a57', faceLow: '#c52343', crease: '#8c142b', gloss: '#ff9fb2', edge: '#ee5a78',
-    facetHi: '#8e1630', facet: '#4a0816', facetDark: '#070001', lower: '#5f3f41', lowerDark: '#2e0c12',
-    back: '#3a0a12', backMid: '#5a141e', lip: '#f23f61', lipLow: '#c42a49',
-    fwd: '#ef3c5b', fwdTop: '#e3304f', fwdLow: '#c92745', fwdSpec: '#ffa3b3',
-  },
-  mag: {
-    face: '#6e2a55', faceTop: '#3c1530', faceHi: '#7e3866', faceLow: '#65264f', crease: '#3a1229', gloss: '#c58aae', edge: '#93507c',
-    facetHi: '#55203f', facet: '#2a0d20', facetDark: '#050104', lower: '#3f3437', lowerDark: '#1b0f11',
-    back: '#1c0b14', backMid: '#2c1221', lip: '#a3477e', lipLow: '#6e2c55',
-    fwd: '#814369', fwdTop: '#71375b', fwdLow: '#622d4f', fwdSpec: '#c58db1',
-  },
-  blank: {
-    face: '#e8e7e1', faceTop: '#b9b5ab', faceHi: '#f3f2ee', faceLow: '#e1dfd8', crease: '#b5b0a5', gloss: '#ffffff', edge: '#fbfaf7',
-    facetHi: '#c9c5bd', facet: '#8d877e', facetDark: '#3a352f', lower: '#85807a', lowerDark: '#5a554f',
-    back: '#7f7569', backMid: '#94897c', lip: '#f2f1ec', lipLow: '#cfc9bf',
-    fwd: '#f4f3ee', fwdTop: '#e9e8e2', fwdLow: '#dad7ce', fwdSpec: '#ffffff',
-  },
-};
-
-function defs(geo, id) {
-  const c = geo.colors;
-  const d = s('defs');
-  d.append(
-    linear(`${id}-bezel`, [[0, '#e8e6df'], [0.1, '#e1ded6'], [0.75, '#d8d4cb'], [1, '#cdc9bf']]),
-    linear(`${id}-strip`, [[0, '#dedbd3'], [1, '#d2cec4']]),
-    linear(`${id}-bevel`, [[0, '#d9d5cb'], [0.5, '#c3beb3'], [1, '#8f897f']], { x1: 0, y1: 0, x2: 1, y2: 0 }),
-    linear(`${id}-window`, [[0, '#1e151c'], [0.5, '#1b1219'], [1, '#170f15']], { x1: 0, y1: 0, x2: 1, y2: 1 }),
-    linear(`${id}-glare`, [[0, '#ffffff', 0], [0.4, '#ffffff', 0.018], [0.52, '#ffffff', 0.035], [0.6, '#ffffff', 0]],
-      { x1: 0, y1: 0, x2: 1, y2: 0.35 }),
-    linear(`${id}-topshade`, [[0, '#000000', 0.6], [1, '#000000', 0]]),
-    linear(`${id}-topwall`, [[0, '#c9c4ba'], [0.55, '#a39d92'], [1, '#6f685f']]),
-    // across-the-face shading of the REST paddles (lit side / notch side)
-    linear(`${id}-shadeR`, [[0, '#ffffff', 0.1], [0.45, '#ffffff', 0], [0.75, '#000000', 0.06], [1, '#000000', 0.28]], { x1: 0, y1: 0, x2: 1, y2: 0 }),
-    linear(`${id}-shadeL`, [[0, '#000000', 0.28], [0.25, '#000000', 0.06], [0.55, '#ffffff', 0], [1, '#ffffff', 0.1]], { x1: 0, y1: 0, x2: 1, y2: 0 }),
-    linear(`${id}-bay`, [[0, '#040203'], [0.5, '#0c0709'], [1, '#070405']]),
-    linear(`${id}-baywallL`, [[0, '#000000', 0.7], [1, '#000000', 0]], { x1: 0, y1: 0, x2: 1, y2: 0 }),
-    linear(`${id}-ledge`, [[0, '#29231f'], [0.08, '#4d453e'], [0.3, '#7a736a'], [0.75, '#9a948a'], [1, '#a9a398']]),
-    linear(`${id}-lip`, [[0, '#b2ab9f'], [0.5, '#a39c91'], [1, '#867e74']]),
-    radial(`${id}-lens`, [[0, '#2b1416'], [0.72, c.lens_unlit], [1, '#1e0f11']]),
-    radial(`${id}-knob`, [[0, '#2c2c30'], [0.55, '#111113'], [0.92, '#050506'], [1, '#18181b']], { cx: 0.4, cy: 0.33, r: 0.68 }),
-    linear(`${id}-knobbar`, [[0, '#3a3a40'], [0.18, '#26262b'], [0.6, '#151518'], [1, '#09090a']], { x1: 0, y1: 0, x2: 1, y2: 0 }),
-    radial(`${id}-knobshadow`, [[0, '#000000', 0.65], [0.7, '#000000', 0.4], [1, '#000000', 0]]),
-    radial(`${id}-chrome`, [[0, '#f2f2ef'], [0.4, '#b9b9b5'], [0.72, '#6f6f6c'], [0.86, '#b4b4b0'], [1, '#5a5a57']],
-      { cx: 0.42, cy: 0.36, r: 0.7 }),
-    linear(`${id}-keybow`, [[0, '#7a7a77'], [0.25, '#f2f2ef'], [0.55, '#a9a9a5'], [0.8, '#d9d9d5'], [1, '#62625f']], { x1: 0, y1: 0, x2: 1, y2: 0 }),
-    radial(`${id}-keyring`, [[0, '#0b0b0d'], [0.78, '#060607'], [0.92, '#232327'], [1, '#09090b']]),
+/**
+ * The moulding's pebbled surface: a tile of small light and dark dots, placed
+ * by a fixed pseudo-random sequence, so that every panel looks the same.
+ */
+function pebbles(id) {
+  const size = 24; // mm
+  let seed = 0x2f6e2b1;
+  const rnd = () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const dots = (n) => Array.from({ length: n }, () => `M${f2(rnd() * size)},${f2(rnd() * size)}h0`).join('');
+  const layer = (stroke, opacity, n, width) => s('path', { d: dots(n), fill: 'none', stroke, opacity, 'stroke-linecap': 'round', 'stroke-width': width });
+  return s('pattern', { id: `${id}-pebbles`, width: size, height: size, patternUnits: USER },
+    layer('#2c281c', 0.05, 420, 0.34),
+    layer('#ffffff', 0.1, 420, 0.38),
+    layer('#2c281c', 0.018, 110, 0.75),
+    layer('#ffffff', 0.04, 110, 0.8),
   );
-  for (const [name, p] of Object.entries(PADDLE)) {
-    d.append(
-      linear(`${id}-${name}-upper`, [[0, p.faceTop], [0.035, p.faceHi], [0.22, p.face], [0.8, p.face], [0.93, p.faceLow], [1, p.crease]]),
-      linear(`${id}-${name}-lower`, [[0, p.lowerDark], [0.06, p.lower], [0.55, p.lower], [0.88, p.lowerDark], [1, '#000000']]),
-      linear(`${id}-${name}-facetR`, [[0, p.facetHi], [0.35, p.facet], [1, p.facetDark]], { x1: 0, y1: 0, x2: 1, y2: 0 }),
-      linear(`${id}-${name}-facetL`, [[0, p.facetDark], [0.65, p.facet], [1, p.facetHi]], { x1: 0, y1: 0, x2: 1, y2: 0 }),
-      linear(`${id}-${name}-gloss`, [[0, p.gloss, 0], [0.5, p.gloss, 0.6], [1, p.gloss, 0]]),
-      linear(`${id}-${name}-back`, [[0, p.lipLow], [0.02, p.lip], [0.1, p.lip], [0.17, p.lipLow], [0.185, p.backMid], [0.32, p.back], [1, p.back]]),
-      linear(`${id}-${name}-fwd`, [[0, p.fwdTop], [0.06, p.fwd], [0.75, p.fwd], [0.94, p.fwdLow], [1, '#000000']]),
-    );
-  }
-  return d;
 }
 
-// ---------------------------------------------------------------- frame
-
-/** Outline of the dark window plus the paddle bay below it. */
-function openingPath(geo) {
-  const w = geo.frame.window;
-  const b = geo.frame.bay;
-  const rt = w.rt;
-  const rbl = f2(b.x0 - w.x0); // the window's bottom corners curve into the bay walls
-  const rbr = f2(w.x1 - b.x1);
-  return `M${w.x0},${f2(w.y0 + rt)} A${rt},${rt} 0 0 1 ${f2(w.x0 + rt)},${w.y0} L${f2(w.x1 - rt)},${w.y0} ` +
-    `A${rt},${rt} 0 0 1 ${w.x1},${f2(w.y0 + rt)} L${w.x1},${f2(w.y1 - rbr)} A${rbr},${rbr} 0 0 1 ${b.x1},${w.y1} ` +
-    `L${b.x1},${b.y1} L${b.x0},${b.y1} L${b.x0},${w.y1} A${rbl},${rbl} 0 0 1 ${w.x0},${f2(w.y1 - rbl)} Z`;
+function fixedDefs(d, geo) {
+  const id = d.id;
+  d.add(pebbles(id));
+  d.add(
+    // the cream as photographed
+    acrossX(`${id}-face`, [[-10, '#c5c2b5'], [8, '#c8c5b9'], [30, '#cbc9bd'], [120, '#d6d3ca'], [200, '#dedbd3'],
+      [300, '#e4e3db'], [400, '#ebeae4'], [440, '#f0efeb'], [474, '#f1f0ec']]),
+    acrossX(`${id}-chamfer`, [[-10, '#a0a095'], [30, '#a2a497'], [120, '#b1b2a6'], [200, '#b9bab0'],
+      [400, '#d0d3cb'], [440, '#d6dad3'], [474, '#dcdfd8']]),
+    acrossX(`${id}-chamfer2`, [[-10, '#bab9ad'], [30, '#b4b4a8'], [120, '#b9baae'], [200, '#c0c2b7'],
+      [400, '#dadfd7'], [440, '#dfe2dc'], [474, '#e4e7e1']]),
+    acrossY(`${id}-falloff`, [[20, '#000000', 0], [120, '#000000', 0.012], [205, '#000000', 0.03]]),
+    // the walls around the panel, top and right, in shade
+    acrossY(`${id}-wall`, [[23.3, '#4e443c'], [28, '#4a4137'], [31, '#42392f'], [39, '#403830'], [59, '#362f28'], [97, '#2b231f'],
+      [146, '#31221f'], [165, '#3e2b25'], [177, '#49362f'], [187.4, '#544338'], [195, '#62564c'], [204.4, '#6a5d52']]),
+    // the top wall lightens into the lit left wall around the panel's corner
+    linear(`${id}-wallend`, [[0, 1], [0.115, 0.9], [0.27, 0.8], [0.385, 0.66], [0.46, 0.5], [0.54, 0.3], [0.615, 0.15], [0.77, 0.02], [1, 0]].map(([o, a]) => [o, mix('#4e443c', '#c6c3b6', a)]),
+      { x1: -4.58, y1: 25.61, x2: 7.94, y2: 22.12, units: USER }),
+    acrossX(`${id}-walledge`, [[5, '#8d867b', 0.3], [14, '#8d867b', 0.75], [400, '#8d867b', 0.75], [470, '#b5b0a5', 0.7]]),
+    acrossY(`${id}-leftridge`, [[44, '#f6f4e8', 0], [75, '#f6f4e8', 0.09], [204, '#f6f4e8', 0.09]]),
+    // the left pocket's surfaces, in planes that meet in a diagonal ridge: the
+    // gradients run across the ridge, from outside in
+    linear(`${id}-pocketB`, [[0, '#c2bab0', 0], [0.27, '#c0b9ae', 1], [0.52, '#c2bab0', 1], [0.67, '#cfc9be', 1], [0.74, '#d5d0c5', 1], [0.8, '#d8d4ca', 1], [0.87, '#dcd8cf', 1], [0.95, '#e2dfd8', 1], [1, '#e4e1da', 1]],
+      { x1: ridgeX - 14.2 * NX, y1: ridgeY - 14.2 * NY, x2: ridgeX, y2: ridgeY, units: USER }),
+    linear(`${id}-pocketC`, [[0, '#e2e0d8'], [0.08, '#dfdcd3'], [0.19, '#d9d6cb'], [0.31, '#d5d2c6'], [0.54, '#d2cfc3'], [1, '#cecbbf']],
+      { x1: ridgeX, y1: ridgeY, x2: ridgeX + 13 * NX, y2: ridgeY + 13 * NY, units: USER }),
+    radial(`${id}-pocketglow`, [[0, '#f0eee7', 0.42], [0.4, '#f0eee7', 0.26], [1, '#f0eee7', 0]], { cx: 2.5, cy: 188, r: 13, units: USER }),
+    acrossX(`${id}-pocketedge`, [[-7, '#c6c2b6', 1], [-6.1, '#c6c2b6', 0]]),
+    // the right pocket, lit up to the wall's shadow, whose edge runs diagonally
+    linear(`${id}-pocketR`, [[0, '#e9e8e3', 1], [0.25, '#e9e8e3', 0.86], [0.5, '#e9e8e3', 0.48], [0.75, '#e9e8e3', 0.1], [1, '#e9e8e3', 0]],
+      { x1: 462.1, y1: 196.5, x2: 465.9, y2: 193.5, units: USER }),
+    // the fold above the shelf
+    acrossY(`${id}-foldL`, [[204.4, '#cbc8bb'], [205.4, '#c5c1b4'], [206.4, '#b8b3a5'], [207, '#9c9689'], [207.5, '#797367'], [208.1, '#544d43']]),
+    acrossY(`${id}-foldR`, [[204.4, '#ecebe6'], [205.2, '#f6f5f2'], [206, '#dedad2'], [206.8, '#cac5bb'], [207.6, '#9d978d'], [208.1, '#726c63']]),
+    // the shelf: the same cream in its own shadow, catching the light towards its lower edge
+    acrossY(`${id}-shelf`, [[207.8, '#4e473e'], [215, '#4f4840'], [220, '#4e473e'], [225, '#4a4339'], [228, '#463d33'], [230, '#413830'], [235, '#3f352b'], [239.5, '#42382e'],
+      [241.5, '#4c4137'], [243, '#5a5046'], [244.5, '#6a6054'], [246, '#7d7468'], [247.5, '#8d857a'], [249, '#9b9488'], [250, '#a59e92']]),
+    acrossX(`${id}-shelfacross`, [[0, '#fff2e0', 0], [120, '#fff2e0', 0.012], [300, '#fff2e0', 0.035], [440, '#fff2e0', 0.05]]),
+    radial(`${id}-shelfglow`, [[0, '#8c897e', 0.92], [0.45, '#8c897e', 0.62], [0.75, '#8c897e', 0.22], [1, '#8c897e', 0]],
+      { cx: 478, cy: 214, r: 34, units: USER, transform: 'translate(478 214) scale(1 0.5) translate(-478 -214)' }),
+    linear(`${id}-shelfcorner`, [[0, '#d7d4cb', 0], [0.2, '#d7d4cb', 0.14], [0.45, '#d7d4cb', 0.55], [0.72, '#d7d4cb', 0.88], [1, '#d7d4cb', 1]],
+      { x1: 458, y1: 237.1, x2: 462.3, y2: 242, units: USER }),
+    // the lettering on the logo plate: faces a little lighter than the cream, shadow edges
+    acrossX(`${id}-plateface`, [[15, '#e2e0d7'], [70, '#e4e2da'], [120, '#e8e6de'], [200, '#ece9e2'], [285, '#f0eee8']]),
+    acrossX(`${id}-emboss`, [[15, '#4a4a40'], [70, '#55554a']]),
+    acrossX(`${id}-embosstag`, [[60, '#6a6a5e'], [285, '#747468']]),
+    // the panel: a sheen towards the upper right ...
+    radial(`${id}-sheen`, [[0, '#ffffff', 0.16], [0.136, '#ffffff', 0.137], [0.326, '#ffffff', 0.06], [0.48, '#ffffff', 0.047], [0.66, '#ffffff', 0.026], [1, '#ffffff', 0]],
+      { cx: 445, cy: 30, r: 310, units: USER, transform: 'translate(445 30) scale(1 0.58) translate(-445 -30)' }),
+    radial(`${id}-printsheen`, [[0, '#ffffff', 0.085], [0.136, '#ffffff', 0.075], [0.326, '#ffffff', 0.034], [0.48, '#ffffff', 0.026], [0.66, '#ffffff', 0.014], [1, '#ffffff', 0]],
+      { cx: 445, cy: 30, r: 310, units: USER, transform: 'translate(445 30) scale(1 0.58) translate(-445 -30)' }),
+    // and along the bottom: broad towards the right of the panel, small in its left corner
+    radial(`${id}-sheenlow`, [[0, '#ffffff', 0.09], [0.37, '#ffffff', 0.07], [0.55, '#ffffff', 0.05], [0.72, '#ffffff', 0.03], [1, '#ffffff', 0]],
+      { cx: 350, cy: 195, r: 210, units: USER, transform: 'translate(350 195) scale(1 0.27) translate(-350 -195)' }),
+    radial(`${id}-sheencorner`, [[0, '#ffffff', 0.055], [0.4, '#ffffff', 0.04], [1, '#ffffff', 0]], { cx: 0, cy: 190, r: 35, units: USER }),
+    acrossY(`${id}-topshade`, [[28.7, '#060303', 0.92], [31.3, '#060303', 0.8], [34.4, '#060303', 0.34], [37.5, '#060303', 0]]),
+    acrossX(`${id}-rightshade`, [[452, '#060303', 0], [458, '#060303', 0.35], [463.5, '#060303', 0.75]]),
+    acrossY(`${id}-lip`, [[40, '#2a2622', 0.26], [170, '#2a2622', 0.26], [181, '#2a2622', 0.14], [187, '#2a2622', 0]]),
+    acrossX(`${id}-lipedge`, [[16, '#463638'], [100, '#3f3135'], [200, '#6d5b5c'], [350, '#776668'], [440, '#7d6a6a'], [448, '#3a2e32']]),
+    // the printed colours, lit from the right
+    acrossX(`${id}-tile-rose`, [[18, '#7a273b'], [90, '#7e2439'], [175, '#872b40'], [270, '#8e2e45'], [350, '#913049'], [440, '#96344c']]),
+    acrossX(`${id}-tile-mag`, [[38, '#4a2841'], [125, '#512e4a'], [210, '#593551'], [297, '#5e3855'], [397, '#633d5a'], [440, '#603a57']]),
+    acrossX(`${id}-bar-rose`, [[20, '#762438'], [100, '#7a263b'], [182, '#81283d'], [270, '#892d43']]),
+    acrossX(`${id}-bar-mag`, [[50, '#4c2c44'], [139, '#51304a'], [225, '#57344f'], [320, '#5c3954']]),
+    // knob: black, glossy, lit from the upper right
+    radial(`${id}-knobskirt`, [[0, '#060607'], [0.62, '#060606'], [1, '#08080a']], { cx: 0.6, cy: 0.38, r: 0.7 }),
+    linear(`${id}-knobsheen`, [[0, '#ffffff', 0.2], [0.12, '#ffffff', 0.55], [0.3, '#ffffff', 0.3], [0.55, '#ffffff', 0.06], [0.75, '#ffffff', 0]], { x1: 0.82, y1: 0.117, x2: 0.5, y2: 0.5 }),
+    radial(`${id}-knobshadow`, [[0, '#050403', 0.88], [0.7, '#050403', 0.84], [0.86, '#050403', 0.42], [1, '#050403', 0]]),
+    linear(`${id}-knobbar`, [[0, '#141416'], [0.3, '#121213'], [1, '#101011']], { x1: 0, y1: 0, x2: 1, y2: 0 }),
+    linear(`${id}-flutes`, [[0, '#ffffff', 0.028], [0.55, '#ffffff', 0.008], [1, '#ffffff', 0]], { x1: 1, y1: 0, x2: 0, y2: 1 }),
+    // key: dull worn metal in a black escutcheon
+    radial(`${id}-cylinder`, [[0, '#352c2b'], [0.7, '#332a29'], [0.92, '#3c3331'], [1, '#2a2322']], { cx: 0.5, cy: 0.5, r: 0.5 }),
+    linear(`${id}-cylinderrim`, [[0, '#4b403a'], [0.45, '#3f3634'], [0.8, '#5f534f'], [1, '#7a6e69']], { x1: 0, y1: 0.6, x2: 1, y2: 0.35 }),
+    radial(`${id}-keyring`, [[0, '#0c0c0d'], [0.86, '#0d0d0e'], [0.915, '#040404'], [0.955, '#19181a'], [1, '#100f11']]),
+    acrossY(`${id}-keyblade`, [[-12, '#7f7b77'], [-6, '#6c6866'], [-4, '#4a4542'], [9.5, '#4a4542']]),
+    // the flat side of the key at OFF (its short end up to the right) and at LOCK (its long end there)
+    acrossY(`${id}-keyoff`, [[-10.2, '#6d615e'], [-8, '#514744'], [-2, '#5a504d'], [2, '#6e6260'], [4.2, '#8d7e7c'], [5.2, '#cfc9cd'], [8.4, '#e4e2e6']]),
+    acrossY(`${id}-keylock`, [[-10.2, '#e4e2e6'], [-7, '#cfc9cd'], [-6, '#8d7e7c'], [-3.8, '#6e6260'], [2, '#5a504d'], [6.4, '#514744'], [8.4, '#6d615e']]),
+  );
+  paddleDefs(d);
 }
 
-function bezel(geo, id) {
+// ---------------------------------------------------------------- bezel
+
+function bezel(geo, d) {
   const f = geo.frame;
+  const b = f.bezel;
+  const w = f.wall;
+  const le = f.ledge;
+  const bay = f.bay;
+  const { x0, y0, x1, y1, r } = b;
+  const tx = x1 - b.taper.dx; // the shelf's right edge
+  const rightEdge = (y) => (y <= b.taper.y0 ? x1 : y >= b.taper.y1 ? tx : x1 - (b.taper.dx * (y - b.taper.y0)) / (b.taper.y1 - b.taper.y0));
+  const silhouette = `M${f2(x0 + r)},${y0} L${f2(x1 - r)},${y0} Q${x1},${y0} ${x1},${f2(y0 + r)} L${x1},${b.taper.y0} ` +
+    `L${f2(tx)},${b.taper.y1} L${f2(tx)},${f2(y1 - r)} Q${f2(tx)},${y1} ${f2(tx - r)},${y1} ` +
+    `L${f2(x0 + r)},${y1} Q${x0},${y1} ${x0},${f2(y1 - r)} L${x0},${f2(y0 + r)} Q${x0},${y0} ${f2(x0 + r)},${y0} Z`;
   const g = s('g', { class: 'bezel' });
+
+  // the face, its rounded outer edge and the top edge's chamfer with its mitred ends
+  const ch = f.chamfer.y;
   g.append(
-    rrect(f.bezel.x0, f.bezel.y0, f.bezel.x1, f.bezel.y1, f.bezel.r, { fill: `url(#${id}-bezel)` }),
-    rrect(f.bezel.x0 + 0.6, f.bezel.y0 + 0.35, f.bezel.x1 - 0.6, f.bezel.y0 + 1.2, 0.5, { fill: '#f4f3ee', opacity: 0.75 }),
-    // raised logo strip: shadow below, highlight above, face, thin outline
-    rrect(f.strip.x0 + 0.2, f.strip.y0 + 0.6, f.strip.x1 + 0.25, f.strip.y1 + 0.6, f.strip.r, { fill: '#aaa59a', opacity: 0.85 }),
-    rrect(f.strip.x0, f.strip.y0 - 0.25, f.strip.x1, f.strip.y1, f.strip.r, { fill: '#f3f1ec' }),
-    rrect(f.strip.x0 + 0.25, f.strip.y0 + 0.1, f.strip.x1 - 0.2, f.strip.y1 - 0.2, f.strip.r - 0.2, {
-      fill: `url(#${id}-strip)`, stroke: '#bdb8ad', 'stroke-width': 0.22,
-    }),
-    // the moulded wall around the opening (light on the left, in shadow on the right)
-    s('path', { d: openingPath(geo), fill: 'none', stroke: `url(#${id}-bevel)`, 'stroke-width': 5.2, 'stroke-linejoin': 'round' }),
-    s('path', { d: openingPath(geo), fill: 'none', stroke: '#8a8479', 'stroke-width': 1.6, 'stroke-linejoin': 'round', opacity: 0.55 }),
-    // the top inner wall is in the shadow of the logo band
-    s('path', {
-      d: `M${f2(f.window.x0 + 2)},${f2(f.window.y0 - 2.6)} L${f2(f.window.x1 - 2)},${f2(f.window.y0 - 2.6)} ` +
-        `L${f2(f.window.x1 - f.window.rt)},${f.window.y0} L${f2(f.window.x0 + f.window.rt)},${f.window.y0} Z`,
-      fill: `url(#${id}-topwall)`, opacity: 0.9,
-    }),
+    s('path', { d: silhouette, fill: d.url('face'), stroke: '#6d695d', 'stroke-width': 0.7, 'stroke-opacity': 0.75 }),
+    s('path', { d: silhouette, fill: d.url('falloff') }),
+    s('path', { d: poly([[x0 + 0.3, y0], [x1 - 0.3, y0], [x1, y0 + 0.3], [x1 - 1.1, ch - 0.3], [x0 + 1.5, ch - 0.3], [x0, y0 + 0.3]]), fill: d.url('chamfer') }),
+    s('path', { d: poly([[x0 + 1.5, ch - 0.3], [x1 - 1.1, ch - 0.3], [x1 - 1.3, ch + 0.5], [x0 + 1.7, ch + 0.5]]), fill: d.url('chamfer2') }),
+  );
+
+  // the left wall: a soft ridge where it folds out of the face, running down
+  // into the pocket, and the planes of the pocket below it
+  const ridge = outline([[[-5, 44], [-5, 60], [-5.3, 100], [-6, 140], [-6.2, 180], [-6.15, 204.4]]], { closed: false });
+  const yFold = le.y0 + 0.1;
+  const ridgeBot = [-5.9, yFold];
+  const ridgeTop = [ridgeX, ridgeY];
+  g.append(
+    s('path', { d: poly([[-6.5, 150], [ridgeX + 2, 150], ridgeTop, ridgeBot, [-6.5, yFold]]), fill: d.url('pocketB') }),
+    s('path', { d: poly([ridgeTop, [ridgeX + 2, 165], [18, 165], [18, yFold], ridgeBot]), fill: d.url('pocketC') }),
+    s('path', { d: poly([[-4, 178], [16, 178], [16, 201], [-4, 201]]), fill: d.url('pocketglow') }),
+    rrect(-7, 165, -6.1, yFold, 0, { fill: d.url('pocketedge') }),
+    ...[2, 1.3, 0.7].map((sw) => s('path', { d: ridge, fill: 'none', stroke: d.url('leftridge'), 'stroke-width': sw })),
+  );
+
+  // the top and right walls in shade, the corner between them, the lit right pocket over the wall's end
+  const arch = [[-3.6, 38], [-3.45, 33], [-2.7, 29.5], [-1, 26], [1.4, 23.9], [5, 22.95]]; // around the panel's corner
+  const wallEnd = outline([arch, [[9, 23.03]], [[9, 40]], [[-3.6, 40]]]);
+  const wallShape = outline([[[8, 23.02], ...w.top.slice(1), ...w.right], [[w.right.at(-1)[0], yFold]], [[452, yFold]], [[452, 40]], [[8, 40]]]);
+  const edgeLine = outline([[...w.top.map(([x, y]) => [x, y - 0.12]), ...w.right.map(([x, y]) => [x + 0.08, y])]], { closed: false });
+  g.append(
+    s('path', { d: edgeLine, fill: 'none', stroke: d.url('walledge'), 'stroke-width': 0.32 }),
+    s('path', { d: wallShape, fill: d.url('wall') }),
+    s('path', { d: poly([[448, 187], [w.right.at(-1)[0] + 0.1, 187], [w.right.at(-1)[0] + 0.1, yFold], [453, yFold]]), fill: d.url('pocketR') }),
+    s('path', { d: wallEnd, fill: d.url('wallend') }),
+  );
+
+  // the shelf
+  const shelfTop = le.y1;
+  const shelf = `M${x0},${f2(shelfTop)} L${f2(rightEdge(shelfTop))},${f2(shelfTop)} L${f2(tx)},${b.taper.y1} L${f2(tx)},${f2(y1 - r)} ` +
+    `Q${f2(tx)},${y1} ${f2(tx - r)},${y1} L${f2(x0 + r)},${y1} Q${x0},${y1} ${x0},${f2(y1 - r)} Z`;
+  g.append(
+    s('path', { d: shelf, fill: d.url('shelf') }),
+    s('path', { d: shelf, fill: d.url('shelfacross') }),
+    s('path', { d: shelf, fill: d.url('shelfglow') }),
+    s('path', { d: shelf, fill: d.url('shelfcorner') }),
+  );
+
+  // the fold between pockets and shelf
+  g.append(
+    rrect(x0, le.y0, 10.25, le.y1, 0, { fill: d.url('foldL') }),
+    s('path', { d: line([[10.05, 203.4], [10.05, le.y1]]), fill: 'none', stroke: '#e8e5da', 'stroke-width': 0.26, opacity: 0.55 }),
+    s('path', { d: poly([[453.2, le.y0], [rightEdge(le.y0), le.y0], [rightEdge(le.y1), le.y1], [453.2, le.y1]]), fill: d.url('foldR') }),
+  );
+
+  // the pebbled surface of everything so far: fine on the lit cream, barely visible in the shade
+  const wallTop = w.top[0][1];
+  const lit = `M${x0},${y0} L${x1},${y0} L${x1},${wallTop} L${x0},${wallTop} Z M${x0},${wallTop} L0,${wallTop} L0,${yFold} L${x0},${yFold} Z ` +
+    `M450,187.3 L${x1},187.3 L${x1},${yFold} L450,${yFold} Z M0,187.3 L16,187.3 L16,${yFold} L0,${yFold} Z`;
+  g.append(
+    s('path', { d: lit, fill: d.url('pebbles') }),
+    s('path', { d: shelf, fill: d.url('pebbles'), opacity: 0.28 }),
+    s('path', { d: wallShape, fill: d.url('pebbles'), opacity: 0.2 }),
+    s('path', { d: wallEnd, fill: d.url('pebbles'), opacity: 0.2 }),
+  );
+
+  // The recess the paddles stand in: dark, with a cheek on each side where its
+  // wall meets the slope of the pocket.
+  const cheekTop = 187.4;
+  g.append(
+    // the left cheek: a lit slope, its dark wall, the black recess
+    s('path', { d: poly([[15.3, cheekTop], [12, 210.5], [12.6, 212], [15.2, 218.5], [16.3, BOTTOM + 0.3], [19, BOTTOM + 0.3], [19, cheekTop]]), fill: '#0d0605' }),
+    s('path', { d: outline([[[15.25, 188], [10.35, 204.2]], [[10.25, le.y1 + 0.2], [10.7, 209], [11.55, 211.1]], [[12.05, 210], [12.7, 204.3], [15.35, 190]]]),
+      fill: d.vertical('cheekL', [[188.4, '#c9b6ae'], [192, '#c2aea5'], [196, '#b8a89f'], [200, '#b7aaa2'], [204, '#bdb2aa'], [208, '#c3bcb2'], [211, '#bfb6ab']]) }),
+    s('path', { d: outline([[[14.75, 194.2], [12.7, 204.3], [12.05, 210], [11.75, 211.2]], [[15.3, 219.5]], [[14.8, 214], [14.2, 208], [14.3, 203], [14.95, 197]]]),
+      fill: d.vertical('cheekL2', [[194, '#201312'], [200, '#221412'], [206, '#261615'], [208, '#34221e'], [212, '#3c2d27'], [219.5, '#2a1f1b']]) }),
+    // the right cheek: a triangle reflecting the last paddle
+    s('path', { d: poly([[445, 186], [448.5, 187.2], [453.4, le.y0 + 2], [448.45, 218.4], [447, BOTTOM + 0.3], [445, BOTTOM + 0.3]]), fill: '#140807' }),
+    s('path', { d: outline([[[448.5, 190.5], [450.05, 197.2], [451.6, 200.8], [453.3, 206.5]], [[452, 212], [449.8, 215.6], [448.6, 217.8]]]),
+      fill: d.vertical('cheekR', [[190, '#5a2224'], [203, '#5e2628'], [207, '#592b2a'], [209, '#573331'], [212, '#59403c'], [216, '#4c4340']]) }),
+    s('path', { d: poly([[bay.x0, 184], [bay.x1, 184], [bay.x1, 216], [447, BOTTOM + 0.3], [bay.x0 + 1.2, BOTTOM + 0.3]]), fill: '#0b0204' }),
+    // the row's contact shadow on the shelf
+    s('path', { d: outline([[[bay.x0 + 0.8, BOTTOM + 0.2], [446.6, BOTTOM + 0.2]], [[446.2, BOTTOM + 2.4], [bay.x0 + 1.2, BOTTOM + 2.4]]]),
+      fill: d.vertical('contact', [[BOTTOM + 0.2, '#060202', 0.9], [BOTTOM + 0.7, '#060202', 0.5], [BOTTOM + 1.2, '#060202', 0.24], [BOTTOM + 1.8, '#060202', 0.08], [BOTTOM + 2.4, '#060202', 0]]) }),
   );
   return g;
 }
 
-function branding(geo) {
+/**
+ * Logo plate: an edge pressed into the moulding, strong on the sides away from
+ * the light, a dark line with a light one beside it; faint towards the light.
+ */
+function plate(geo) {
+  const { x0, y0, x1, y1, r } = geo.frame.strip;
+  const shade = `M${f2(x0 + r * 0.3)},${f2(y0 + r * 0.3)} A${r},${r} 0 0 0 ${x0},${f2(y0 + r)} L${x0},${f2(y1 - r)} A${r},${r} 0 0 0 ${f2(x0 + r)},${y1} ` +
+    `L${f2(x1 - r)},${y1} A${r},${r} 0 0 0 ${f2(x1 - r * 0.3)},${f2(y1 - r * 0.3)}`;
+  const lit = `M${f2(x0 + r * 0.3)},${f2(y0 + r * 0.3)} A${r},${r} 0 0 1 ${f2(x0 + r)},${y0} L${f2(x1 - r)},${y0} A${r},${r} 0 0 1 ${x1},${f2(y0 + r)} L${x1},${f2(y1 - r)} A${r},${r} 0 0 1 ${f2(x1 - r * 0.3)},${f2(y1 - r * 0.3)}`;
+  const seg = (dd, color, width, opacity, tx = 0, ty = 0) => s('path', {
+    d: dd, fill: 'none', stroke: color, 'stroke-width': width, 'stroke-linecap': 'round', opacity,
+    transform: tx || ty ? `translate(${tx},${ty})` : null,
+  });
+  return s('g', { class: 'plate', 'aria-hidden': 'true' },
+    seg(lit, '#f2f0e8', 0.26, 0.55, -0.1, 0.34),
+    seg(shade, '#f4f2ea', 0.3, 0.62, -0.68, 0.36),
+    seg(lit, '#8f8d80', 0.2, 0.42),
+    seg(shade, '#3d3c33', 0.36, 0.88),
+  );
+}
+
+function branding(geo, d) {
   const a = geo.art;
   const g = s('g', { class: 'branding', 'aria-hidden': 'true' });
-  // debossed: a light edge below/right, the groove shadow, the floor
-  const deboss = (d, dx = 0) => [
-    s('path', { d, transform: `translate(${f2(dx + 0.16)},0.2)`, fill: '#fbfaf6' }),
-    s('path', { d, transform: dx ? `translate(${f2(dx)},0)` : null, fill: '#9a958a' }),
-    s('path', { d, transform: `translate(${f2(dx + 0.07)},0.09)`, fill: '#bbb6ab' }),
-  ];
-  for (const b of a.digital.boxes) {
+  // Raised, tone on tone: a dark line on the side away from the light, the face
+  // lighter than the cream around it.
+  const shadow = d.url('emboss');
+  const face = d.url('plateface');
+  const { tiles: t, letters } = a.digital;
+  letters.forEach((l, i) => {
+    const x = t.x0 + i * t.pitch;
+    const tf = `translate(${f2(x)},0)`;
     g.append(
-      s('rect', { x: b.x + 0.15, y: b.y + 0.18, width: b.w, height: b.h, rx: 0.25, fill: 'none', stroke: '#fbfaf6', 'stroke-width': 0.35 }),
-      s('rect', { x: b.x, y: b.y, width: b.w, height: b.h, rx: 0.25, fill: 'none', stroke: '#a39e93', 'stroke-width': 0.35 }),
+      // the tile: light along its top and right, dark along its left and bottom
+      s('rect', { x: f2(x + t.pitch - 0.72), y: f2(t.y0 + 0.1), width: 0.6, height: f2(t.y1 - t.y0 - 0.1), fill: face }),
+      s('path', { d: `M${f2(x + 0.2)},${f2(t.y0)} L${f2(x + t.pitch - 0.12)},${f2(t.y0)}`, fill: 'none', stroke: face, 'stroke-width': 0.22 }),
+      s('path', { d: `M${f2(x)},${f2(t.y0)} L${f2(x)},${f2(t.y1)} L${f2(x + t.pitch - 0.12)},${f2(t.y1)}`, fill: 'none', stroke: shadow, 'stroke-width': 0.3 }),
+      // the letter: a stroke drawn twice
+      s('path', { d: l, transform: `translate(${f2(x - 0.26)},0.22)`, fill: 'none', stroke: shadow, 'stroke-width': t.stroke }),
+      s('path', { d: l, transform: tf, fill: 'none', stroke: face, 'stroke-width': t.stroke }),
     );
-  }
-  for (const l of a.digital.letters) g.append(...deboss(l.d, l.dx));
-  g.append(...deboss(a.tagline.d));
+  });
+  // the tagline's letters are shallower than the logo's: their shadow edge is paler
+  const tg = a.tagline;
+  const tagShadow = d.url('embosstag');
+  const tf = `translate(0,${tg.ty}) scale(1,${tg.sy})`;
+  const grown = { 'stroke-width': tg.stroke, 'stroke-linejoin': 'round' };
+  g.append(
+    s('path', { d: tg.d, transform: `translate(-0.3,${f2(tg.ty + 0.24)}) scale(1,${tg.sy})`, fill: tagShadow, stroke: tagShadow, ...grown }),
+    s('path', { d: tg.d, transform: tf, fill: face, stroke: face, ...grown }),
+  );
   return g;
 }
 
-function opening(geo, id) {
+// ---------------------------------------------------------------- the panel
+
+function panelOutline(geo) {
   const w = geo.frame.window;
   const b = geo.frame.bay;
-  const d = openingPath(geo);
-  return s('g', { class: 'window' },
-    s('path', { d, fill: `url(#${id}-window)` }),
-    s('path', { d, fill: `url(#${id}-glare)` }),
-    // shadow cast by the bezel's top edge onto the acrylic
-    s('rect', { x: w.x0 + 4, y: w.y0, width: f2(w.x1 - w.x0 - 8), height: 2.4, fill: `url(#${id}-topshade)`, opacity: 0.85 }),
-    // the paddle bay: a dark recess with shaded side walls
-    rrect(b.x0, w.y1, b.x1, b.y1, 0, { fill: `url(#${id}-bay)` }),
-    rrect(b.x0, w.y1, b.x0 + 2.5, b.y1, 0, { fill: `url(#${id}-baywallL)` }),
-  );
+  return outline([
+    [...w.left.slice(-3), ...w.top, ...w.right],
+    [[b.x1, 187.3]], [[b.x1, b.y0R]], [[b.x0, b.y0L]], [[b.x0, 187.5]],
+    [...w.left.slice(0, -2)],
+  ]);
 }
 
-function bayFront(geo, id) {
-  const f = geo.frame;
-  return s('g', { class: 'ledge' },
-    rrect(f.bezel.x0, f.ledge.y0, f.bezel.x1, f.ledge.y1, 0, { fill: `url(#${id}-ledge)` }),
-    s('path', { d: roundedPath(f.bezel.x0, f.lip.y0, f.bezel.x1, f.lip.y1, 0, f.bezel.r), fill: `url(#${id}-lip)` }),
-    rrect(f.bezel.x0, f.lip.y0, f.bezel.x1, f.lip.y0 + 0.5, 0, { fill: '#c9c3b8', opacity: 0.8 }),
+/** Light and shade over the panel and whatever is printed dark on it. */
+function panelLight(geo, d, body) {
+  const b = geo.frame.bay;
+  const lip = outline([geo.frame.window.left.filter(([, y]) => y >= 40).reverse()], { closed: false });
+  return s('g', { class: 'panel-light' },
+    s('path', { d: body, fill: d.url('sheen') }),
+    s('path', { d: body, fill: d.url('sheenlow') }),
+    s('path', { d: body, fill: d.url('sheencorner') }),
+    s('path', { d: body, fill: d.url('topshade') }),
+    s('path', { d: body, fill: d.url('rightshade') }),
+    // the panel's lower edge catches the light above the paddles
+    s('path', { d: line([[b.x0 + 0.4, b.y0L - 0.1], [b.x1 - 0.3, b.y0R - 0.1]]), fill: 'none', stroke: d.url('lipedge'), 'stroke-width': 0.42 }),
+    // the soft shadow lip where the panel is set into the lit left wall, fading around its lower corner
+    ...[1.1, 0.7, 0.35].map((width) => s('path', { d: lip, fill: 'none', stroke: d.url('lip'), 'stroke-width': width })),
   );
 }
-
-// ---------------------------------------------------------------- printed panel
 
 /**
  * Black lamp cells as one path: fused at the top (rounded top corners for
@@ -231,81 +353,114 @@ function barPath(b, notch) {
   p.push(`L${f2(x1 - rr)},${f2(y0)}`);
   if (rr) p.push(`A${rr},${rr} 0 0 1 ${f2(x1)},${f2(y0 + rr)}`);
   p.push(`L${f2(x1)},${f2(y1)}`);
-  // black tabs rising into the bar from its bottom edge: concave fillets at
-  // the base, straight flanks, a round top (r4 §2.2, scan zoom)
+  // black tabs rising into the bar from its bottom edge: wide concave flares at
+  // the base, straight flanks, a flat top with barely rounded corners
   const ht = notch.top / 2;
-  const fr = (notch.base - notch.top) / 2;
-  for (const nx of [...b.notches].sort((a, c) => c - a)) {
+  const hb = notch.base / 2;
+  const yt = y1 - notch.h;
+  const c = 0.14;
+  for (const nx of [...b.notches].sort((a, e) => e - a)) {
     p.push(
-      `L${f2(nx + ht + fr)},${f2(y1)}`,
-      `Q${f2(nx + ht)},${f2(y1)} ${f2(nx + ht)},${f2(y1 - fr)}`,
-      `L${f2(nx + ht)},${f2(y1 - notch.h + ht)}`,
-      `A${ht},${ht} 0 0 0 ${f2(nx - ht)},${f2(y1 - notch.h + ht)}`,
-      `L${f2(nx - ht)},${f2(y1 - fr)}`,
-      `Q${f2(nx - ht)},${f2(y1)} ${f2(nx - ht - fr)},${f2(y1)}`,
+      `L${f2(nx + hb)},${f2(y1)}`,
+      `C${f2(nx + hb - 1.5)},${f2(y1)} ${f2(nx + ht)},${f2(y1 - 1)} ${f2(nx + ht)},${f2(y1 - 2.45)}`,
+      `L${f2(nx + ht)},${f2(yt + c)}`,
+      `Q${f2(nx + ht)},${f2(yt)} ${f2(nx + ht - c)},${f2(yt)}`,
+      `L${f2(nx - ht + c)},${f2(yt)}`,
+      `Q${f2(nx - ht)},${f2(yt)} ${f2(nx - ht)},${f2(yt + c)}`,
+      `L${f2(nx - ht)},${f2(y1 - 2.45)}`,
+      `C${f2(nx - ht)},${f2(y1 - 1)} ${f2(nx - hb + 1.5)},${f2(y1)} ${f2(nx - hb)},${f2(y1)}`,
     );
   }
   p.push('Z');
   return p.join(' ');
 }
 
-function boxesAndCells(geo) {
+/** The black print: on matt black the panel's sheen is half as strong as on the panel. */
+function boxesAndCells(geo, d) {
   const c = geo.colors;
-  const g = s('g', { class: 'boxes' });
+  const shapes = [];
   for (const b of geo.boxes) {
-    if (b.id.startsWith('status') || b.id === 'parity') continue; // drawn as cells
-    g.append(rrect(b.x0, b.y0, b.x1, b.y1, b.r, { fill: c.box }));
+    if (b.id === 'parity') shapes.push(s('path', { d: cellPath(geo.parityCell, { rt: b.r }) }));
+    else if (b.corners) shapes.push(s('path', { d: cornersPath(b.x0, b.y0, b.x1, b.y1, b.corners) }));
+    else shapes.push(rrect(b.x0, b.y0, b.x1, b.y1, b.r));
   }
-  for (const sc of geo.statusCells) g.append(s('path', { d: cellPath(sc, { rt: sc.r }), fill: c.box }));
   // cells under the bars start inside the bar (no seam; the black shows in the notches)
-  for (const cc of geo.cells) g.append(s('path', { d: cellPath(cc, { top: cc.y0 - 4.3 }), fill: c.box }));
-  for (const b of geo.bars) {
-    g.append(s('path', { d: barPath(b, geo.notch), fill: b.color === 'rose' ? c.bar_rose : c.bar_mag }));
-  }
+  for (const cc of geo.cells) shapes.push(s('path', { d: cellPath(cc, { top: cc.y0 - 4.3 }) }));
+  const g = s('g', { class: 'boxes', fill: c.box }, shapes);
+  const lit = s('g', { class: 'boxes-sheen', fill: d.url('printsheen') }, shapes.map((e) => e.cloneNode()));
+  return [g, lit];
+}
+
+/** The windows printed on the sheet, with the same half sheen as the black print. */
+function lampWindows(geo, d) {
+  const shapes = geo.lamps.map((l) => rrect(l.cx - l.w / 2, l.cy - l.h / 2, l.cx + l.w / 2, l.cy + l.h / 2, 1.5));
+  return [
+    s('g', { class: 'lamp-windows', fill: geo.colors.window_unlit }, shapes),
+    s('g', { fill: d.url('printsheen') }, shapes.map((e) => e.cloneNode())),
+  ];
+}
+
+function bars(geo, d) {
+  const g = s('g', { class: 'bars' });
+  for (const b of geo.bars) g.append(s('path', { d: barPath(b, geo.notch), fill: d.url(`bar-${b.color}`) }));
   return g;
 }
 
-function lampWindows(geo, id) {
-  const g = s('g', { class: 'lamp-windows' });
-  for (const l of geo.lamps) {
-    g.append(
-      rrect(l.cx - l.w / 2, l.cy - l.h / 2, l.cx + l.w / 2, l.cy + l.h / 2, 1.3, { fill: geo.colors.window_unlit }),
-      s('circle', { cx: l.cx, cy: l.cy, r: 2.6, fill: `url(#${id}-lens)` }),
-    );
-  }
-  return g;
-}
-
-function tiles(geo) {
-  const c = geo.colors;
+function tiles(geo, d) {
   const g = s('g', { class: 'tiles' });
-  for (const t of geo.tiles) {
-    g.append(rrect(t.x0, t.y0, t.x1, t.y1, t.r, { fill: t.color === 'rose' ? c.tile_rose : c.tile_mag }));
-  }
+  for (const t of geo.tiles) g.append(s('path', { d: cornersPath(t.x0, t.y0, t.x1, t.y1, t.corners), fill: d.url(`tile-${t.color}`) }));
   return g;
+}
+
+/** Labels up to this cap height (mm) are enlarged on small panels: see panel.css. */
+const SMALL_CAP = 2.8;
+
+/** Is this label printed on a colour tile? */
+const onTile = (l) => l.tile || (l.y > 165 && l.x > 340);
+
+/** The point a small label grows from, and how far it may grow sideways before it meets its neighbours. */
+function growth(l) {
+  const w = l.textLength ?? 3;
+  // left-aligned beside the lamps of the knob boxes, up to the next lamp or the knob's shadow
+  if (l.x > 345 && l.y < 150) return { x: l.x, xmax: f2(Math.max(1, (l.x < 385 ? 20.5 : 19.7) / w)) };
+  if (onTile(l)) return { x: l.x, xmax: f2(11.9 / w) }; // stays on its tile
+  return { x: l.x, xmax: w > 15 ? 1.1 : f2(Math.max(1.12, 13.1 / w)) }; // above a lamp, one column wide
+}
+
+function labelText(geo, l, { live = false } = {}) {
+  const lf = { capHeight: 0.686, weight: 600, tileWeight: 500, ...geo.labelFont };
+  const size = l.cap / lf.capHeight;
+  const small = live && !l.tile && l.cap <= SMALL_CAP;
+  const g = small ? growth(l) : null;
+  const t = s('text', {
+    x: l.x, y: l.y, 'font-size': f2(size), 'text-anchor': l.anchor,
+    'font-weight': l.tile ? lf.tileWeight : null,
+    'word-spacing': l.wordSpacing ? f2(l.wordSpacing * size) : null,
+    textLength: l.textLength ?? null, lengthAdjust: l.textLength ? 'spacingAndGlyphs' : null,
+    class: small ? ['small', l.upper && 'upper', l.upper && l.width > 15 && 'wide', /^\d+$/.test(l.text) && 'digits'].filter(Boolean).join(' ') : null,
+    style: small ? `transform-origin:${g.x}px ${l.y}px;--xmax:${g.xmax}` : null,
+  });
+  if (l.text.startsWith('μ')) {
+    // the panel's µ is taller than the letters beside it, and slanted
+    t.append(s('tspan', { 'font-size': f2(size * 1.25), 'font-style': 'italic' }, 'μ'), l.text.slice(1));
+  } else {
+    t.textContent = l.text;
+  }
+  return t;
 }
 
 function labels(geo) {
-  const lf = { capHeight: 0.686, capScale: 1, weight: 600, tileWeight: 500, ...geo.labelFont };
-  const g = s('g', { class: 'labels', fill: geo.colors.ink, 'aria-hidden': 'true' });
-  for (const l of geo.labels) {
-    const size = (l.cap * lf.capScale) / lf.capHeight;
-    const t = s('text', {
-      x: l.x, y: l.y, 'font-size': f2(size), 'text-anchor': l.anchor,
-      'font-weight': l.tile ? lf.tileWeight : null,
-      'word-spacing': l.wordSpacing ? f2(l.wordSpacing * size) : null,
-      textLength: l.textLength ?? null, lengthAdjust: l.textLength ? 'spacingAndGlyphs' : null,
-    });
-    t.textContent = l.text;
-    g.append(t);
-  }
-  return g;
+  // The sheet is thick: white print on the colour tiles throws a faint shadow onto the backing.
+  const ghost = s('g', { class: 'label-shadows', fill: '#14060f', opacity: 0.2, transform: 'translate(-0.25,0.8)', 'aria-hidden': 'true' },
+    geo.labels.filter(onTile).map((l) => labelText(geo, l)));
+  const g = s('g', { class: 'labels', fill: geo.colors.ink, color: geo.colors.ink, 'aria-hidden': 'true' }, geo.labels.map((l) => labelText(geo, l, { live: true })));
+  return [ghost, g];
 }
 
 /** pdp11/70 badge: outlined "pdp" and "70" (union outline via a mask), solid "11", thin "/". */
 function logo(geo, id) {
   const L = geo.logo;
-  const ink = geo.colors.ink;
+  const ink = L.ink;
   const t = L.t;
   const tr = L.transform;
   const mask = s('mask', { id: `${id}-logo-mask`, maskUnits: 'userSpaceOnUse', x: 0, y: 0, width: 800, height: 300 });
@@ -365,135 +520,98 @@ export function insetPolygon(list, d) {
   return out;
 }
 
-function keyStatic(geo, id) {
+// ---------------------------------------------------------------- key and knobs
+
+function keyStatic(geo, d) {
   const k = geo.key;
-  const g = s('g', { class: 'key-static', transform: `translate(${k.cx},${k.cy})` });
-  // faint printed guide lines from the key towards POWER, LOCK and OFF
-  for (const a of [315, 45, 225]) {
-    const rad = ((a - 90) * Math.PI) / 180;
-    g.append(s('line', {
-      x1: f2(Math.cos(rad) * 10.3), y1: f2(Math.sin(rad) * 10.3), x2: f2(Math.cos(rad) * 12.8), y2: f2(Math.sin(rad) * 12.8),
-      stroke: '#3b2d35', 'stroke-width': 0.35,
-    }));
-  }
-  g.append(
-    s('circle', { r: 9.9, fill: '#070609' }),
-    s('circle', { r: 9.6, fill: `url(#${id}-keyring)` }),
-    s('circle', { r: 9.4, fill: 'none', stroke: '#2c2b30', 'stroke-width': 0.3 }),
-    s('circle', { r: 5.8, fill: '#141416' }),
-    s('circle', { r: 5.4, fill: `url(#${id}-chrome)` }),
-    s('circle', { r: 3.6, fill: '#58524d', opacity: 0.55 }),
-    s('circle', { r: 3.6, fill: 'none', stroke: '#d8d8d4', 'stroke-width': 0.25, opacity: 0.5 }),
-  );
-  return g;
-}
-
-// ---------------------------------------------------------------- movable parts
-
-/** The key bow seen edge-on, rotated by controls.js about the key centre. */
-function keyMovable(geo, id) {
-  const k = geo.key;
-  // the end pointing at the selected position is a little wider and carries
-  // an index notch, so OFF (225 deg) and LOCK (45 deg) can be told apart
-  const bow = 'M-1.8,-11.5 Q0,-12.2 1.8,-11.5 L1.35,6.5 Q0,7.1 -1.35,6.5 Z';
-  const rot = s('g', { class: 'key-rot' },
-    s('path', { d: bow, fill: '#000', opacity: 0.5, transform: 'translate(0.8,1.0)' }),
-    s('path', { d: bow, fill: `url(#${id}-keybow)`, stroke: '#3e3e3b', 'stroke-width': 0.22 }),
-    s('rect', { x: -0.32, y: -11.1, width: 0.64, height: 1.7, rx: 0.3, fill: '#3c3c39' }),
-    s('circle', { r: 1.2, fill: '#6d6d69' }),
-  );
-  return s('g', { class: 'key', transform: `translate(${k.cx},${k.cy})` }, rot);
-}
-
-function knobMovable(geo, id, kn) {
-  const rot = s('g', { class: 'knob-rot' },
-    // the raised bar: its side (offset) and its top face with the pointer
-    s('rect', { x: -4.5, y: -12.6, width: 9.0, height: 25.6, rx: 3.6, fill: '#020203', transform: 'translate(0.55,0.75)' }),
-    s('rect', { x: -4.6, y: -13.0, width: 9.2, height: 26.0, rx: 3.6, fill: '#060607' }),
-    s('rect', { x: -4.25, y: -12.65, width: 8.5, height: 25.3, rx: 3.3, fill: `url(#${id}-knobbar)` }),
-    s('rect', { x: -3.7, y: -12.0, width: 1.4, height: 24.0, rx: 0.7, fill: '#ffffff', opacity: 0.08 }),
-    s('path', { d: 'M-4.25,-9.4 A3.3,3.3 0 0 1 -0.95,-12.65 L0.95,-12.65 A3.3,3.3 0 0 1 4.25,-9.4', fill: 'none', stroke: '#6b6b72', 'stroke-width': 0.3, opacity: 0.6 }),
-    s('rect', { x: -0.42, y: -11.0, width: 0.84, height: 10.4, rx: 0.42, fill: geo.colors.ink }),
-    s('circle', { r: 1.25, fill: geo.colors.ink }),
-  );
-  return s('g', { class: 'knob', 'data-knob': kn.name, transform: `translate(${kn.cx},${kn.cy})` },
-    s('ellipse', { cx: 1.6, cy: 2.4, rx: kn.r + 2.0, ry: kn.r + 1.8, fill: `url(#${id}-knobshadow)` }),
-    s('circle', { r: kn.r, fill: `url(#${id}-knob)` }),
-    s('path', { d: `M${f2(-kn.r * 0.94)},${f2(-kn.r * 0.34)} A${kn.r},${kn.r} 0 0 1 ${f2(kn.r * 0.34)},${f2(-kn.r * 0.94)}`, fill: 'none', stroke: '#4a4a50', 'stroke-width': 0.4, opacity: 0.7 }),
-    rot,
+  return s('g', { class: 'key-static', transform: `translate(${k.cx},${k.cy})` },
+    // the black escutcheon with its raised ring, the small hole for the lock pin
+    s('circle', { r: 10.3, fill: d.url('keyring') }),
+    s('circle', { cx: 4.4, cy: 4.7, r: 0.42, fill: '#000000' }),
+    // the worn cylinder, its rim catching the light on the right
+    s('circle', { r: 5.1, fill: '#080707' }),
+    s('circle', { r: 4.8, fill: d.url('cylinder') }),
+    s('circle', { r: 4.45, fill: 'none', stroke: d.url('cylinderrim'), 'stroke-width': 0.62 }),
+    s('path', { d: 'M3.3,-3.05 A4.5,4.5 0 0 1 4.3,-1.3', fill: 'none', stroke: '#c0bbb9', 'stroke-width': 0.4, 'stroke-linecap': 'round' }),
   );
 }
 
 /**
- * One paddle in its three poses (REST bow-tie, BACK raised, FWD pressed).
- * The face's waist (13.5 -> 10.3 mm at the crease) is split between the
- * sides according to the slot's distance from the panel centre, like the
- * real row seen from the front: the side facing the centre shows the facet.
+ * The flat key, rotated by controls.js about the cylinder's centre; the plug
+ * inside the cylinder turns with it. The key stands proud of a panel seen from
+ * its middle: at POWER the camera looks along the blade (a thin edge and the
+ * head, wide and flat, pointing at the position), at OFF and LOCK at its flat
+ * side, which then shows beside the cylinder and is bright towards the light.
  */
-function paddle(geo, id, p) {
-  const pal = PADDLE[p.color];
-  const { cx, top: t, crease: m, bottom: b } = p;
-  const hw = p.w / 2;
-  const x0 = cx - hw;
-  const x1 = cx + hw;
-  const off = Math.max(-1, Math.min(1, (p.slot - 14.5) / 3));
-  const waist = 3.6; // 13.5 -> 9.9 mm: reads like the photo's row (UI.md: ~10.3)
-  const insL = (waist / 2) * (1 + 0.84 * off);
-  const insR = waist - insL;
-  const u = (n) => `url(#${id}-${p.color}-${n})`;
-  const g = s('g', { class: 'paddle', 'data-slot': p.slot, 'data-name': p.name, 'data-pose': 'rest' });
-
-  // The faces are waisted by lens-shaped side facets (photo zoom): a facet
-  // starts ~20 % down the paddle, is deepest just above the crease and ends
-  // ~78 % down; the face to its side is straight. The facet facing the
-  // panel centre is the deep one.
-  const H = b - t;
-  const yTop = t + 0.2 * H;
-  const yBot = t + 0.78 * H;
-  const yW = m - 1.5;
-  // facet boundary: leaves the edge at a shallow angle, vertical at its
-  // deepest point (cubic segments), a pointed lens like the photo's
-  const facetEdge = (side, d) => {
-    const xe = side > 0 ? x1 : x0; // paddle edge
-    const xi = xe - side * d; // deepest point
-    const a = yW - yTop;
-    const c = yBot - yW;
-    return `M${f2(xe)},${f2(yTop)} C${f2(xe - side * 0.25 * d)},${f2(yTop + 0.3 * a)} ${f2(xi)},${f2(yW - 0.45 * a)} ${f2(xi)},${f2(yW)} ` +
-      `C${f2(xi)},${f2(yW + 0.4 * c)} ${f2(xe - side * 0.25 * d)},${f2(yBot - 0.3 * c)} ${f2(xe)},${f2(yBot)}`;
+function keyMovable(geo, d) {
+  const k = geo.key;
+  // A blade seen flat, from its long end (y0) to its short end (y1), on a slight
+  // slant; x is its centre line's place, the side towards the light is `lit`.
+  const flat = (name, x, y0, y1) => {
+    const at = (y) => x + 0.119 * y;
+    const lit = x > 0 ? 1 : -1;
+    const hw = (y) => 1.2 + ((y - y0) / (y1 - y0)) * -0.4;
+    const edge = (side, y) => [at(y) + side * hw(y), y];
+    const blade = poly([edge(lit, y0), edge(lit, y1 - 0.9), [at(y1) + lit * 0.2, y1], edge(-lit, y1 - 0.4), edge(-lit, y0 + 0.25)]);
+    return s('g', { class: `key-flat key-${name}` },
+      s('path', { d: blade, fill: '#040303', opacity: 0.75, transform: `translate(${-lit * 0.75},0.15)` }),
+      s('path', { d: blade, fill: d.url(name) }),
+      // the maker's lettering stamped into it, the edge towards the light, the edge away from it
+      s('line', { x1: f2(at(-6)), y1: -6, x2: f2(at(3)), y2: 3, stroke: '#1d1a18', 'stroke-width': 0.9, 'stroke-dasharray': '0.22 0.3', opacity: 0.42 }),
+      s('path', { d: line([edge(lit, y0 + 1), edge(lit, y1 - 1)]), fill: 'none', stroke: '#d9d5d1', 'stroke-width': 0.14, opacity: 0.6 }),
+      s('path', { d: line([edge(-lit, y0 + 0.3), edge(-lit, y1 - 0.5)]), fill: 'none', stroke: '#0a0807', 'stroke-width': 0.22, opacity: 0.8 }),
+    );
   };
-  const lens = (side, d) => (d < 0.25 ? null : `${facetEdge(side, d)} Z`);
-  const rimOf = facetEdge;
-  const deep = insR >= insL ? 1 : -1; // +1: the deep facet is on the right
-  const shade = `url(#${id}-${deep > 0 ? 'shadeR' : 'shadeL'})`;
-  const rest = s('g', { class: 'pose pose-rest' },
-    s('rect', { x: f2(x0), y: t, width: p.w, height: f2(m - t), rx: 0.5, fill: u('upper') }),
-    s('rect', { x: f2(x0), y: m, width: p.w, height: f2(b - m), fill: u('lower') }),
-    s('rect', { x: f2(x0), y: t, width: p.w, height: f2(H), rx: 0.5, fill: shade }),
-    // glossy band high on the upper face, the crease, the side facets with their glossy rims
-    s('rect', { x: f2(x0 + 1.2), y: f2(t + 1.8), width: f2(p.w - 2.4), height: 1.5, rx: 0.4, fill: u('gloss'), opacity: 0.3 }),
-    s('line', { x1: f2(x0), y1: f2(m - 0.15), x2: f2(x1), y2: f2(m - 0.15), stroke: pal.gloss, 'stroke-width': 0.3, opacity: 0.35 }),
-    ...[[1, insR], [-1, insL]].map(([side, d]) => lens(side, d) && s('path', {
-      d: lens(side, d), fill: `url(#${id}-${p.color}-facet${side > 0 ? 'R' : 'L'})`,
-    })),
-    ...[[1, insR], [-1, insL]].map(([side, d]) => d >= 0.25 && s('path', {
-      d: rimOf(side, d), fill: 'none', stroke: pal.edge, 'stroke-width': 0.3, opacity: d > 0.8 ? 0.8 : 0.35,
-    })),
+  const rot = s('g', { class: 'key-rot' },
+    s('circle', { class: 'key-plug', r: 3.7 }),
+    s('g', { class: 'key-edge', transform: 'translate(-1.5,0)' },
+      s('path', { d: 'M0.5,-11.8 L1.9,-8 L1,-3.8 L1,6 L1.9,7.6 L0.95,8.1 Z', fill: '#040303', opacity: 0.8 }),
+      s('path', { d: 'M-1.4,-11 L0.5,-11.8 L0.5,-5.8 L0.15,-3.8 L0.15,5.4 L0.95,7.7 L-0.35,8.1 L-1,5.2 L-1,-4 L-1.4,-6 Z', fill: d.url('keyblade') }),
+      s('path', { d: 'M0.15,5.2 L0.95,7.7 L-0.35,8.1 L-1,5.2 Z', fill: '#a58764' }),
+      s('path', { d: 'M0.12,-3.8 L0.12,5.3', fill: 'none', stroke: '#d4cfcb', 'stroke-width': 0.2 }),
+      s('path', { d: 'M-0.5,-5 L-0.45,4.6', fill: 'none', stroke: '#26221f', 'stroke-width': 0.22 }),
+      s('path', { d: 'M0.48,-11.8 L0.48,-5.8 L0.14,-3.8', fill: 'none', stroke: '#b9b5b0', 'stroke-width': 0.16 }),
+    ),
+    flat('keyoff', 2.8, -10.2, 8.4),
+    flat('keylock', -2.8, -10.2, 8.4),
   );
-  const back = s('g', { class: 'pose pose-back' },
-    s('rect', { x: f2(x0), y: t, width: p.w, height: f2(b - t), rx: 0.5, fill: u('back') }),
-    // the raised paddle still shows a narrow facet on the side facing the centre
-    s('path', { d: deep > 0 ? `M${f2(x1)},${f2(t + 7)} L${f2(x1 - 1.1)},${f2(t + 12)} L${f2(x1 - 1.1)},${f2(b - 4)} L${f2(x1)},${f2(b - 1)} Z`
-      : `M${f2(x0)},${f2(t + 7)} L${f2(x0 + 1.1)},${f2(t + 12)} L${f2(x0 + 1.1)},${f2(b - 4)} L${f2(x0)},${f2(b - 1)} Z`, fill: '#000000', opacity: 0.35 }),
-    s('rect', { x: f2(x0 + 0.6), y: f2(t + 9), width: f2(p.w - 1.2), height: f2(b - t - 12), rx: 0.4, fill: '#ffffff', opacity: 0.025 }),
-    s('rect', { x: f2(x0), y: f2(b - 1.3), width: p.w, height: 1.3, fill: '#000', opacity: 0.4 }),
+  return s('g', { class: 'key', transform: `translate(${k.cx},${k.cy})` }, rot);
+}
+
+function knobMovable(geo, d, kn) {
+  const ink = '#ecebe5';
+  const rs = 11; // the dome; below its top it is one with its shadow
+  // the raised bar: a strip across the knob's round top
+  const bar = (hw, R, c) => {
+    const yc = Math.sqrt(R * R - hw * hw);
+    const xc = hw - c;
+    return `M${-hw},${f2(-yc + c)} Q${-hw},${f2(-yc)} ${f2(-xc)},${f2(-yc - 0.1)} A${R},${R} 0 0 1 ${f2(xc)},${f2(-yc - 0.1)} Q${hw},${f2(-yc)} ${hw},${f2(-yc + c)} ` +
+      `L${hw},${f2(yc - c)} Q${hw},${f2(yc)} ${f2(xc)},${f2(yc + 0.1)} A${R},${R} 0 0 1 ${f2(-xc)},${f2(yc + 0.1)} Q${-hw},${f2(yc)} ${-hw},${f2(yc - c)} Z`;
+  };
+  // a long edge of the bar catches the light when it faces it (panel.css, by position)
+  const edge = (cls, x) => s('path', { class: `knob-edge ${cls}`, d: `M${x},-7.5 L${x},7.5`, fill: 'none', stroke: '#f4f4f2', 'stroke-width': 0.2, 'stroke-linecap': 'round' });
+  const rot = s('g', { class: 'knob-rot' },
+    s('path', { d: bar(4.45, 10.55, 0.7), fill: '#020203' }),
+    s('path', { d: bar(4.2, 10.3, 0.7), fill: d.url('knobbar') }),
+    edge('edge-a', 4.17),
+    edge('edge-b', -4.17),
+    // the pointer: a thin line from the pivot to the bar's end
+    s('path', { d: 'M-0.34,-0.4 L-0.24,-10.25 L0.24,-10.25 L0.34,-0.4 Z', fill: ink }),
+    s('circle', { r: 1.22, fill: ink }),
   );
-  const fwd = s('g', { class: 'pose pose-fwd' },
-    s('rect', { x: f2(x0), y: t, width: p.w, height: f2(b - t), rx: 0.5, fill: u('fwd') }),
-    s('rect', { x: f2(x0 + 3), y: f2(b - 3.6), width: f2(p.w - 6), height: 0.7, rx: 0.35, fill: pal.fwdSpec, opacity: 0.25 }),
+  return s('g', { class: 'knob', 'data-knob': kn.name, transform: `translate(${kn.px},${kn.py})` },
+    // the big soft shadow falls to the lower left
+    s('circle', { cx: -7.8, cy: 10.25, r: 12.2, fill: d.url('knobshadow') }),
+    s('g', { transform: `translate(${f2(kn.cx - kn.px)},${f2(kn.cy - kn.py)})` },
+      s('circle', { r: rs + 0.15, fill: '#040405' }),
+      s('circle', { r: rs, fill: d.url('knobskirt') }),
+      // the dome's broad reflection, when the bar lies across the light (panel.css, by position)
+      s('circle', { class: 'knob-sheen', r: rs, fill: d.url('knobsheen') }),
+      // shallow flutes around the rim, barely catching the light
+      s('circle', { r: rs - 0.45, fill: 'none', stroke: d.url('flutes'), 'stroke-width': 0.8, 'stroke-dasharray': '0.8 0.95' }),
+    ),
+    rot,
   );
-  const hl = s('rect', { class: 'paddle-hl', x: f2(x0), y: t, width: p.w, height: f2(b - t), rx: 0.5, fill: '#ffffff' });
-  g.append(rest, back, fwd, hl);
-  return g;
 }
 
 /**
@@ -502,41 +620,39 @@ function paddle(geo, id, p) {
  */
 export function buildPanelSvg(geo, { id = 'pnl', title = 'PDP-11/70 front panel' } = {}) {
   const [vx, vy, vw, vh] = geo.viewBox;
+  const d = new Defs(id);
+  fixedDefs(d, geo);
   const svg = s('svg', {
     class: 'panel-svg', viewBox: `${vx} ${vy} ${vw} ${vh}`, preserveAspectRatio: 'xMidYMid meet',
     role: 'img', 'aria-label': title, focusable: 'false',
   });
+  const body = panelOutline(geo);
   svg.append(
-    defs(geo, id),
-    bezel(geo, id),
-    branding(geo),
-    opening(geo, id),
-    boxesAndCells(geo),
-    lampWindows(geo, id),
-    tiles(geo),
-    labels(geo),
-    logo(geo, id),
-    keyStatic(geo, id),
-    bayFront(geo, id),
+    d.el,
+    bezel(geo, d),
+    plate(geo),
+    branding(geo, d),
+    s('path', { class: 'window', d: body, fill: geo.colors.panel }),
+    panelLight(geo, d, body),
+    // the printed sheet
+    s('g', { class: 'sheet', transform: `matrix(${geo.sheet.join(' ')})` }, ...boxesAndCells(geo, d), ...lampWindows(geo, d), bars(geo, d), tiles(geo, d), ...labels(geo), logo(geo, id)),
+    keyStatic(geo, d),
   );
   const paddles = new Map();
   const pg = s('g', { class: 'paddles' });
   for (const p of geo.paddles) {
-    const g = paddle(geo, id, p);
+    const g = paddle(d, p, p.type === 'sr' ? p.art.x0 + 8.3 : null);
     paddles.set(p.name, g);
     pg.append(g);
   }
-  // the window's bottom edge throws a thin shadow onto the paddle tops
-  const w = geo.frame.window;
-  pg.append(rrect(geo.frame.bay.x0, w.y1, geo.frame.bay.x1, w.y1 + 1.4, 0, { fill: `url(#${id}-topshade)` }));
   svg.append(pg);
   const knobs = new Map();
   for (const kn of geo.knobs) {
-    const g = knobMovable(geo, id, kn);
+    const g = knobMovable(geo, d, kn);
     knobs.set(kn.name, g.querySelector('.knob-rot'));
     svg.append(g);
   }
-  const keyG = keyMovable(geo, id);
+  const keyG = keyMovable(geo, d);
   svg.append(keyG);
   return { svg, paddles, knobs, key: keyG.querySelector('.key-rot') };
 }

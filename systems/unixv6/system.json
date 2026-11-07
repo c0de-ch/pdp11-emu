@@ -18,28 +18,21 @@
       "note": "no password"
     }
   ],
-  "shutdown": "V6 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you: it first types root, which logs in at login: and is harmless at a shell prompt; leave any program first.",
+  "shutdown": "V6 has no shutdown command: log in as root, type sync three times and wait a few seconds, then switch off. Shut down OS does this for you from the login: prompt or a shell prompt: it logs in as root, after logging out another user's idle shell. While a program uses the console it types nothing and says so: leave the program first.",
   "shutdownScript": [
-    {
-      "send": "root\r"
-    },
-    {
-      "expect": "# ",
-      "send": "sync\r"
-    },
-    {
-      "expect": "# ",
-      "send": "sync\r"
-    },
-    {
-      "expect": "# ",
-      "send": "sync\r"
-    },
-    {
-      "expect": "# "
-    }
+    {"ifLineEnds": ["\nlogin: *", "\nName: *", "\n# ", "\n% "], "else": "the console is not at a shell or login: prompt, so nothing was typed. A program may be using it, or a command may be half typed: leave the program (ed: q), or clear the line (@), press Return for a fresh prompt and try again."},
+    {"ifLineEnds": ["\n% "], "send": "\u0004"},
+    {"expectAny": ["login: ", "Name: ", "# "], "timeoutSec": 15, "else": "the user logged in on the console did not log out: log out by hand (Ctrl+D), then try again."},
+    {"ifLineEnds": ["\nlogin: ", "\nName: "], "send": "root\r"},
+    {"ifLineEnds": ["\nlogin: *", "\nName: *"], "send": "@root\r"},
+    {"expectAny": ["# ", "Password:"]},
+    {"ifLineEnds": ["# "], "else": "the console asks for a password the script does not know: log in as root by hand, then try again."},
+    {"expect": "# ", "send": "sync\r"},
+    {"expect": "# ", "send": "sync\r"},
+    {"expect": "# ", "send": "sync\r"},
+    {"expect": "# "}
   ],
-  "notes": "## Log in\n\nLog in as **root** (no password). **#** erases the last character and **@** kills the line (the console's Backspace key sends # for you), DEL interrupts (Ctrl+C sends DEL), Ctrl+D ends input; `\\#` and `\\@` type the characters themselves. This is the Thompson shell: `chdir` instead of `cd`.\n\n## Things to try\n\n* First repair the root file system, once: the kit's disk image has a damaged free list (`icheck /dev/rk0` reports `3 dups in free`), so new files share disk blocks and the C compiler fails with \"Intermediate file error\". Type `sync`, then `icheck -s /dev/rrk0`, and pull the plug right away (key OFF and choose \"Pull the plug\", not \"Shut down\": a sync would write the kernel's old free list back), then power on again. Afterwards `icheck /dev/rk0` is clean.\n* Then compile C: `chdir /tmp`, `cat > hello.c`, type `main() { printf(\"hello, world\\n\"); }`, press Ctrl+D, then `cc hello.c` and `a.out`.\n* `bas` is a BASIC interpreter: `10 print \"hello\"`, `run`, then Ctrl+D to leave.\n* Games in `/usr/games`: `chess`, `bj` (blackjack), `moo`, `ttt`, `cubic` and `wump`.\n* `ed` is the editor; `/usr/source` holds the source of the commands (the kernel source is not on these packs).\n* The display register: the 11/45-11/70 kernel copies the word at the address set in the switch register into the DISPLAY REGISTER on every clock tick. Turn the DATA knob to DISPLAY REGISTER and set the switches to 004670 to watch the tick counter `lbolt`, or to 004674 for the seconds (`nm /rkunix` lists the kernel's variables).\n\n## Shut down\n\nThere is no shutdown or halt command: type `sync` three times, wait a few seconds and switch off.\n",
+  "notes": "## Log in\n\nLog in as **root** (no password). **#** erases the last character and **@** kills the line (the console's Backspace key sends # for you), DEL interrupts (Ctrl+C sends DEL), Ctrl+D ends input; `\\#` and `\\@` type the characters themselves. This is the Thompson shell: `chdir` instead of `cd`.\n\n## Things to try\n\n* First repair the root file system, once: the kit's disk image has a damaged free list (`icheck /dev/rk0` reports `3 dups in free`), so new files share disk blocks and the C compiler fails with \"Intermediate file error\". Type `sync`, then `icheck -s /dev/rrk0`, and pull the plug right away (key OFF and choose \"Pull the plug\", not \"Shut down\": a sync would write the kernel's old free list back), then power on again. Afterwards `icheck /dev/rk0` is clean.\n* Then compile C: `chdir /tmp`, `cat > hello.c`, type `main() { printf(\"hello, world\\n\"); }`, press Ctrl+D, then `cc hello.c` and `a.out`.\n* `bas` is a BASIC interpreter: `10 print \"hello\"`, `run`, then Ctrl+D to leave.\n* Games in `/usr/games`: `chess`, `bj` (blackjack), `moo`, `ttt`, `cubic` and `wump`.\n* `ed` is the editor; `/usr/source` holds the source of the commands (the kernel source is not on these packs).\n* The display register: the 11/45-11/70 kernel copies the word at the address set in the switch register into the DISPLAY REGISTER on every clock tick. Turn the DATA knob to DISPLAY REGISTER and set the switches to 004670 to watch the tick counter `lbolt`, or to 004674 for the seconds (`nm /rkunix` lists the kernel's variables).\n\n## Shut down\n\nThere is no shutdown or halt command: type `sync` three times, wait a few seconds and switch off.\n\n**Shut down OS** does this for you. It starts from the `login:` prompt (a half-typed name is cleared), from a root shell, or from another user's shell, which it logs out first. It never types into a program: with `ed` open, a half-typed command or anything else but a prompt on the last line it stops at once and says what to do (a stop of the service or container then powers off uncleanly).\n",
   "cpu": {
     "memory": "1M"
   },
